@@ -1,0 +1,17 @@
+Toycaml for figuring out how to make mmtk bindings for Ocaml's C runtime
+
+We can print variables, not constants or function return values directly.
+
+We can only pass variables inside Field and caml_aloc
+
+The Field offset is 1-indexed. So the first entry is at offset 1.
+
+The root stack curren
+
+Commands:
+
+1. To create the compiler: flex toycaml.l && bison -d toycaml.y && g++ lex.yy.c toycaml.tab.c -o toycaml.exe -ll  
+
+2. Compiling a .tml script: ./toycaml.exe < test.tml > test_output.c
+
+3. Testing: gcc test_output.c runtime.c -o test_output.out
