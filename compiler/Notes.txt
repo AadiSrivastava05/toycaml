@@ -8,8 +8,8 @@ The Field offset is 1-indexed. So the first entry is at offset 1.
 
 Commands:
 
-1. To create the compiler: flex toycaml.l && bison -d toycaml.y && g++ lex.yy.c toycaml.tab.c -o toycaml -ll  
+1. To create the compiler: flex toycaml.l && bison -d toycaml.y && g++ lex.yy.c toycaml.tab.c -o toycaml.out -ll  
 
-2. Compiling a .tml script: ./toycaml < test.tml > test_output.c
+2. Compiling a .tml script: ./toycaml.out < test.tml > test_output.c
 
 3. Testing: gcc test_output.c -o test_output.out && ./test_output.out
