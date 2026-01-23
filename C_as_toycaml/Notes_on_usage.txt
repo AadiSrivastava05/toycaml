@@ -1,0 +1,11 @@
+1. Use init_heap() to activate the external runtime in C.
+2. Use caml_alloc(len, tag) to get heap memory.
+3. Use make_root(&x) to make the variable x which holds a pointer, as a root.
+4. Use make_static_root(&x) to make the variable x which holds a pointer, as a static root,
+   which will NOT be removed from the GC scanning even after frame ends.
+5. Use toycaml_return(x) to return 'x' variable while returning from a function, so that the runtime can handle frame exit.
+6. Use toycaml_frame when writing a new function's code just after the signature, 
+   indicating that a new frame is formed to the runtime system.
+7. Use long2val(x) and val2long(x) appropriately in your code, the runtime system considers longs(integers) in the OCaml format(value).
+8. Use Field(ptr, offset) to access a slot in the heap memory allocated at ptr.
+
