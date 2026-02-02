@@ -10,6 +10,7 @@
 #define long2val(x) ((x<<1)+1)
 #define val2long(x) (x>>1)
 
+long* get_stack_ptr();
 
 void init_heap();
 

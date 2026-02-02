@@ -23,6 +23,12 @@ long static_stack_idx;
 long current_frame_stack_sz[HEAP_SIZE];
 long current_frame;
 
+long* get_stack_ptr(){
+    long* sp;
+    __asm__ __volatile__("mov %%rsp, %0" : "=r"(sp)); // might not be portable to all ISAs
+    return sp;
+}
+
 void init_heap(){
     heap_ptr = (long*)malloc(HEAP_SIZE*(sizeof(long)));
     limit_ptr = heap_ptr + HEAP_SIZE;
