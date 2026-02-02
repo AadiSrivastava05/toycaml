@@ -8,5 +8,5 @@
    indicating that a new frame is formed to the runtime system.
 7. Use long2val(x) and val2long(x) appropriately in your code, the runtime system considers longs(integers) in the OCaml format(value).
 8. Use Field(ptr, offset) to access a slot in the heap memory allocated at ptr.
-9. Testing: gcc testing_toycaml_c.c runtime.c -o test_output.out
+9. Testing: running make should suffice and spit out the test binary
 

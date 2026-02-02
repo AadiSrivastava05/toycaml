@@ -1,14 +1,14 @@
 [package]
-name = "mmtk_dummyvm"
+name = "mmtk_toycaml"
 version = "0.0.1"
 authors = [" <>"]
 edition = "2021"
 
 [lib]
-name = "mmtk_dummyvm"
+name = "mmtk_toycaml"
 # be careful - LTO is only allowed for certain crate types
 # We know that cdylib should work for LTO.
-crate-type = ["cdylib"]
+crate-type = ["staticlib"]
 
 [profile.release]
 lto = true
