@@ -2,6 +2,7 @@
 #include<stdlib.h>
 
 #define HEAP_SIZE 1024
+#define MIN_ALIGNMENT 2 // since we are just dealing with pointers and integers, we only need one bit here like in Ocaml (hopefully)
 
 #define Field(ptr, offset) ((long*)ptr)[offset]
 #define toycaml_return(x) toycaml_return_handler();return(x)
