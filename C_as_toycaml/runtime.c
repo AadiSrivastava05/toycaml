@@ -34,6 +34,9 @@ long* get_stack_ptr(){
 }
 
 void init_heap(){
+    MMTk_Builder builder = mmtk_create_builder();
+    mmtk_init(builder);
+
     heap_ptr = (long*)malloc(HEAP_SIZE*(sizeof(long)));
     limit_ptr = heap_ptr + HEAP_SIZE;
 
