@@ -25,7 +25,7 @@ long static_stack_idx;
 long current_frame_stack_sz[HEAP_SIZE];
 long current_frame;
 
-MmtkMutator global_mutator;
+MMTk_Mutator mutator;
 
 long* get_stack_ptr(){
     long* sp;
@@ -35,12 +35,21 @@ long* get_stack_ptr(){
 
 void init_heap(){
     MMTk_Builder builder = mmtk_create_builder();
+
+    // mmtk_process(builder, "vm_space_size", "8388608");
+    // // TODO(Isfarul): Figure out about this later
+    // mmtk_process(builder, "no_finalizer", "true");
+    // // TODO(Isfarul): Figure out about this later
+    // mmtk_process(builder, "no_reference_types", "true");
+
     mmtk_init(builder);
+
+    /* TODO: Mutator */
+    // Create a default mutator, for initial thread
+    mutator = mmtk_bind_mutator(NULL);
 
     heap_ptr = (long*)malloc(HEAP_SIZE*(sizeof(long)));
     limit_ptr = heap_ptr + HEAP_SIZE;
-
-    // global_mutator = mmtk_bind_mutator(NULL); // can be used as the thread starting function.
 
     stack_idx = 0;
     static_stack_idx = 0;
@@ -49,55 +58,20 @@ void init_heap(){
 }
 
 long* caml_alloc(long len, long tag){
-    long* result;
-
     if(tag>=256){
         printf("Error in the tag.\n");
         exit(1);
     }
 
-    if(heap_ptr + (len+1) < limit_ptr){
-        *(heap_ptr) = ((len<<10) + (tag));
+    int offset = 0;
+    int semantics = 0; /* 0 = AllocationSemantics::Default */
 
-        result = heap_ptr+1;
+    long *result = (long *)mmtk_alloc(mutator, (len + 1) * sizeof(long), sizeof(long), 0, semantics);
 
-        heap_ptr += (len+1);
-
-        for(int i = 0 ; i<len ; i++){
-            Field(result, i) = 1;
-        }
+    mmtk_post_alloc(mutator, result, len * sizeof(long), tag, semantics);
+    for(int i = 1 ; i <= len; i++) {
+        Field(result, i) = 1;
     }
-    else{
-        printf("Could not allocate, heap will overflow!\n");
-        exit(1);
-    }
-
-    // version for incorporating MMTk (will uncomment after Isfarul setsup the rust side)
-
-    // size_t bytes_sz = (len + 1) * sizeof(long);
-
-    // currently passing 0 for offset and 0 for default allocator
-    // void* raw_mem = mmtk_alloc(global_mutator, bytes_sz, MIN_ALIGNMENT, 0, 0);
-
-    // if (raw_mem == NULL) {
-    //     printf("MMTk could not allocate memory!\n");
-    //     exit(1);
-    // }
-
-    // adding the header part
-    // long* header_ptr = (long*)raw_mem;
-    // *header_ptr = ((len << 10) + tag);
-
-    // ObjectReference starts after header (my understanding)
-    // long* result = header_ptr + 1;
-
-    // Now result has the "object"
-    // mmtk_post_alloc(global_mutator, result, bytes_sz, 0);
-
-    // for(int i = 0; i < len; i++) {
-    //     Field(result, i) = 1; 
-    // }
-
 
     return result;
 }

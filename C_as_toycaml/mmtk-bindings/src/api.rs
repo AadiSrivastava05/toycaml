@@ -98,6 +98,7 @@ pub extern "C" fn mmtk_post_alloc(
     mutator: *mut Mutator<DummyVM>,
     refer: ObjectReference,
     bytes: usize,
+    tag: usize,
     mut semantics: AllocationSemantics,
 ) {
     // This just demonstrates that the binding should check against `max_non_los_default_alloc_bytes` to allocate large objects.
@@ -111,6 +112,8 @@ pub extern "C" fn mmtk_post_alloc(
     {
         semantics = AllocationSemantics::Los;
     }
+    let header_addr = refer.to_raw_address();
+    unsafe { header_addr.store(((bytes >> 8) << 10) | tag); }
     memory_manager::post_alloc::<DummyVM>(unsafe { &mut *mutator }, refer, bytes, semantics)
 }
 

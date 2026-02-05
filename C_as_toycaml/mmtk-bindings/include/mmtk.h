@@ -38,6 +38,7 @@ extern void* mmtk_alloc(MMTk_Mutator mutator,
 extern void mmtk_post_alloc(MMTk_Mutator mutator,
                             void* refer,
                             int bytes,
+                            int tag,
                             int allocator);
 
 // Run the main loop for a GC worker. Does not return
