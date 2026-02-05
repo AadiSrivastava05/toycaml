@@ -3,3 +3,4 @@
 lex.yy.c
 *.out
 *.exe
+target/

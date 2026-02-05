@@ -1,0 +1,3 @@
+[submodule "C_as_toycaml/mmtk-core"]
+	path = C_as_toycaml/mmtk-core
+	url = https://github.com/mmtk/mmtk-core
