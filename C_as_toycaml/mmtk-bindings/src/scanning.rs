@@ -1,5 +1,5 @@
 use crate::DummyVM;
-use crate::DummyVMSlot;
+use crate::OCamlSlot;
 use mmtk::util::opaque_pointer::*;
 use mmtk::util::ObjectReference;
 use mmtk::vm::RootsWorkFactory;
@@ -14,14 +14,14 @@ impl Scanning<DummyVM> for VMScanning {
     fn scan_roots_in_mutator_thread(
         _tls: VMWorkerThread,
         _mutator: &'static mut Mutator<DummyVM>,
-        _factory: impl RootsWorkFactory<DummyVMSlot>,
+        _factory: impl RootsWorkFactory<OCamlSlot>,
     ) {
         unimplemented!()
     }
-    fn scan_vm_specific_roots(_tls: VMWorkerThread, _factory: impl RootsWorkFactory<DummyVMSlot>) {
+    fn scan_vm_specific_roots(_tls: VMWorkerThread, _factory: impl RootsWorkFactory<OCamlSlot>) {
         unimplemented!()
     }
-    fn scan_object<SV: SlotVisitor<DummyVMSlot>>(
+    fn scan_object<SV: SlotVisitor<OCamlSlot>>(
         _tls: VMWorkerThread,
         _object: ObjectReference,
         _slot_visitor: &mut SV,

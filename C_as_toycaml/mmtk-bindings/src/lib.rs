@@ -9,8 +9,11 @@ pub mod collection;
 pub mod object_model;
 pub mod reference_glue;
 pub mod scanning;
+pub mod slot;
 
-pub type DummyVMSlot = mmtk::vm::slot::SimpleSlot;
+pub type OCamlSlot = crate::slot::FieldSlot;
+// TODO(Isfarul): change this to an appropriate implementation
+pub type OCamlSlice = crate::slot::UnimplementedMemorySlice;
 
 #[derive(Default)]
 pub struct DummyVM;
@@ -22,8 +25,8 @@ impl VMBinding for DummyVM {
     type VMCollection = collection::VMCollection;
     type VMActivePlan = active_plan::VMActivePlan;
     type VMReferenceGlue = reference_glue::VMReferenceGlue;
-    type VMSlot = DummyVMSlot;
-    type VMMemorySlice = mmtk::vm::slot::UnimplementedMemorySlice;
+    type VMSlot = OCamlSlot;
+    type VMMemorySlice = OCamlSlice;
 
     /// Allowed maximum alignment in bytes.
     const MAX_ALIGNMENT: usize = 1 << 6;
