@@ -1,6 +1,6 @@
 #include<stdio.h>
 #include<stdlib.h>
-#include "mmtk-toycaml/toycaml/mmtk.h"
+#include "mmtk-bindings/include/mmtk.h"
 
 #define HEAP_SIZE 1024
 #define MIN_ALIGNMENT 2 // since we are just dealing with pointers and integers, we only need one bit here like in Ocaml (hopefully)
