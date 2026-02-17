@@ -1,9 +1,7 @@
 #include<stdio.h>
 #include<stdlib.h>
 #include "mmtk-bindings/include/mmtk.h"
-
-#define HEAP_SIZE 1024
-#define MIN_ALIGNMENT 2 // since we are just dealing with pointers and integers, we only need one bit here like in Ocaml (hopefully)
+#include "runtime.h"
 
 #define Field(ptr, offset) ((long*)ptr)[offset]
 #define toycaml_return(x) toycaml_return_handler();return(x)
@@ -34,17 +32,9 @@ long* get_stack_ptr(){
 }
 
 void init_heap(){
-    MMTk_Builder builder = mmtk_create_builder();
+    mmtk_init(HEAP_SIZE * sizeof(long), "immix");
 
-    // mmtk_process(builder, "vm_space_size", "8388608");
-    // // TODO(Isfarul): Figure out about this later
-    // mmtk_process(builder, "no_finalizer", "true");
-    // // TODO(Isfarul): Figure out about this later
-    // mmtk_process(builder, "no_reference_types", "true");
-
-    mmtk_init(builder);
-
-    /* TODO: Mutator */
+    /* TODO(Aadi): Mutator counter */
     // Create a default mutator, for initial thread
     mutator = mmtk_bind_mutator(NULL);
 

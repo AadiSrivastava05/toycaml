@@ -1,7 +1,7 @@
 #include<stdio.h>
 #include<stdlib.h>
 
-#define HEAP_SIZE 1024
+#define HEAP_SIZE 8192
 #define MIN_ALIGNMENT 2 // since we are just dealing with pointers and integers, we only need one bit here like in Ocaml (hopefully)
 
 #define Field(ptr, offset) ((long*)ptr)[offset]
