@@ -1,26 +1,47 @@
-#include<stdio.h>
-#include<stdlib.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include "mmtk-bindings/include/mmtk.h"
 
-#define HEAP_SIZE 8192
-#define MIN_ALIGNMENT 2 // since we are just dealing with pointers and integers, we only need one bit here like in Ocaml (hopefully)
+#define HEAP_SIZE 1024
+#define MIN_ALIGNMENT 2
 
-#define Field(ptr, offset) ((long*)ptr)[offset]
-#define toycaml_return(x) toycaml_return_handler();return(x)
-#define toycaml_frame toycaml_new_frame()
+/* OCaml-style field access and tagging */
+#define Field(ptr, offset) ((long *)ptr)[offset]
+#define long2val(x) ((x << 1) + 1)
+#define val2long(x) (x >> 1)
 
-#define long2val(x) ((x<<1)+1)
-#define val2long(x) (x>>1)
+/* Safepoint and return handling */
+#define toycaml_return(x)           \
+    do {                            \
+        toycaml_return_handler();   \
+        return (x);                 \
+    } while (0)
 
-long* get_stack_ptr();
+/* Thread-local mutator context */
+__thread MMTk_Mutator mutator;
 
+/* Internal thread wrapper to bind mutator */
+void *thread_entry_point(void *func_ptr);
+
+/* Spawns a domain and increments thread count */
+pthread_t domain_spawn(void *function);
+
+/* Joins a domain and decrements thread count */
+void domain_join(pthread_t pid);
+
+/* Captures current RSP */
+long *get_stack_ptr();
+
+/* Initializes MMTk and main mutator */
 void init_heap();
 
-long* caml_alloc(long len, long tag);
+/* Allocates object with tag and initializes fields */
+long *caml_alloc(long len, long tag);
 
-void make_static_root(long** ptr);
+/* Registers a static pointer as a GC root */
+void make_static_root(long **ptr_to_var);
 
-void make_root(long** ptr);
-
+/* Blocks thread if GC is requested (STW) */
 void toycaml_return_handler();
-
-void toycaml_new_frame();
