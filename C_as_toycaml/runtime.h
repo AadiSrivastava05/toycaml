@@ -1,6 +1,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include "mmtk-bindings/include/mmtk.h"
 

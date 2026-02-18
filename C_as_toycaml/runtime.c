@@ -1,6 +1,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdatomic.h>
 #include "mmtk-bindings/include/mmtk.h"
 #include "runtime.h"
 
@@ -10,10 +11,9 @@ long stack_idx;
 long current_frame_stack_sz[HEAP_SIZE];
 long current_frame;
 
-long num_threads;
-pthread_mutex_t num_threads_lock;
+atomic_long num_threads;
 
-long num_stopped;
+atomic_long num_stopped;
 
 void *thread_entry_point(void *func_ptr)
 {
@@ -29,16 +29,14 @@ pthread_t domain_spawn(void *function)
 {
     pthread_t pid;
 
-    pthread_mutex_lock(&num_threads_lock);
+    atomic_fetch_add(&num_threads, 1);
 
     if (pthread_create(&pid, NULL, thread_entry_point, function) != 0)
     {
+        atomic_fetch_sub(&num_threads, 1);
         perror("Failed to spawn");
         exit(1);
     }
-    num_threads += 1;
-
-    pthread_mutex_unlock(&num_threads_lock);
 
     return pid;
 }
@@ -46,10 +44,9 @@ pthread_t domain_spawn(void *function)
 void domain_join(pthread_t pid)
 {
 
-    pthread_mutex_lock(&num_threads_lock);
     pthread_join(pid, NULL);
-    num_threads -= 1;
-    pthread_mutex_unlock(&num_threads_lock);
+    atomic_fetch_sub(&num_threads, 1);
+
 }
 
 long *get_stack_ptr()
@@ -61,9 +58,8 @@ long *get_stack_ptr()
 
 void init_heap()
 {
-    pthread_mutex_init(&num_threads_lock, NULL);
-    num_threads = 1;
-    num_stopped = 0;
+    atomic_init(&num_threads, 1);
+    atomic_init(&num_stopped, 0);
 
     mmtk_init(HEAP_SIZE * sizeof(long), "immix");
     mutator = mmtk_bind_mutator(NULL);
@@ -114,20 +110,15 @@ void toycaml_return_handler()
 {
     if (wants_to_stop())
     {
-        pthread_mutex_lock(&num_threads_lock);
-        num_stopped++;
-        pthread_mutex_unlock(&num_threads_lock);
+        atomic_fetch_add(&num_stopped, 1);
         while (wants_to_stop())
         {
-            pthread_mutex_lock(&num_threads_lock);
-            if (num_stopped == num_threads)
+            
+            if (atomic_load(&num_stopped) == atomic_load(&num_threads))
             {
                 world_has_stopped();
             }
-            pthread_mutex_unlock(&num_threads_lock);
         }
-        pthread_mutex_lock(&num_threads_lock);
-        num_stopped--;
-        pthread_mutex_unlock(&num_threads_lock);
+        atomic_fetch_sub(&num_stopped, 1);
     }
 }
