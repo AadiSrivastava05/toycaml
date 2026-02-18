@@ -18,6 +18,7 @@
         toycaml_return_handler();   \
         return (x);                 \
     } while (0)
+#define toycaml_frame toycaml_new_frame()
 
 /* Thread-local mutator context */
 __thread MMTk_Mutator mutator;
@@ -45,3 +46,9 @@ void make_static_root(long **ptr_to_var);
 
 /* Blocks thread if GC is requested (STW) */
 void toycaml_return_handler();
+
+/* Adds frame specific roots */
+void make_root(long** ptr);
+
+/* Frame handler */
+void toycaml_new_frame();

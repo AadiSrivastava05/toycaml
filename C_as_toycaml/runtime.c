@@ -4,16 +4,11 @@
 #include "mmtk-bindings/include/mmtk.h"
 #include "runtime.h"
 
-#define HEAP_SIZE 1024
-#define MIN_ALIGNMENT 2 // since we are just dealing with pointers and integers, we only need one bit here like in Ocaml (hopefully)
+long **root_stack[HEAP_SIZE];
+long stack_idx;
 
-#define Field(ptr, offset) ((long *)ptr)[offset]
-#define toycaml_return(x)     \
-    toycaml_return_handler(); \
-    return (x)
-
-#define long2val(x) ((x << 1) + 1)
-#define val2long(x) (x >> 1)
+long current_frame_stack_sz[HEAP_SIZE];
+long current_frame;
 
 long num_threads;
 pthread_mutex_t num_threads_lock;
@@ -100,6 +95,19 @@ void make_static_root(long **ptr_to_var)
 {
     mmtk_make_static_root(ptr_to_var);
     return;
+}
+
+void make_root(long **ptr_to_var)
+{
+    root_stack[stack_idx++] = ptr_to_var;
+    current_frame_stack_sz[current_frame]++;
+    return;
+}
+
+void toycaml_new_frame()
+{
+    current_frame++;
+    current_frame_stack_sz[current_frame] = 0;
 }
 
 void toycaml_return_handler()
