@@ -15,8 +15,6 @@
 #define long2val(x) ((x << 1) + 1)
 #define val2long(x) (x >> 1)
 
-__thread MMTk_Mutator mutator;
-
 long num_threads;
 pthread_mutex_t num_threads_lock;
 
@@ -106,17 +104,17 @@ void make_static_root(long **ptr_to_var)
 
 void toycaml_return_handler()
 {
-    if (WANTS_TO_STOP)
+    if (wants_to_stop())
     {
         pthread_mutex_lock(&num_threads_lock);
         num_stopped++;
         pthread_mutex_unlock(&num_threads_lock);
-        while (WANTS_TO_STOP)
+        while (wants_to_stop())
         {
             pthread_mutex_lock(&num_threads_lock);
             if (num_stopped == num_threads)
             {
-                WORLD_HAS_STOPPED = true;
+                world_has_stopped();
             }
             pthread_mutex_unlock(&num_threads_lock);
         }

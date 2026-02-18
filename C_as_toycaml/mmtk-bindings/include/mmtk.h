@@ -18,6 +18,10 @@ extern "C" {
 
 typedef void* MMTk_Mutator;
 
+extern void world_has_stopped();
+
+extern bool wants_to_stop();
+
 // Initialize an MMTk instance
 extern void mmtk_init(uint32_t heap_size, char *plan);
 
