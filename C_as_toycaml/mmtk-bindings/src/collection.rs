@@ -94,11 +94,13 @@ fn unregister_current_thread() {
     GC_THREADS.write().unwrap().remove(&id);
 }
 
+#[no_mangle]
 pub extern "C" fn world_has_stopped() {
     // TODO(Isfarul): Figure out memory ordering, Julia uses SeqCst
     WORLD_HAS_STOPPED.store(true, Ordering::SeqCst);
 }
 
+#[no_mangle]
 pub extern "C" fn wants_to_stop() -> bool {
     // TODO(Isfarul): Racy??
     // TODO(Both): Expose the boolean to VM directly? (See above)

@@ -2,8 +2,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdatomic.h>
-#include "mmtk-bindings/include/mmtk.h"
 #include "runtime.h"
+#include "mmtk-bindings/include/mmtk.h"
 
 long **root_stack[HEAP_SIZE];
 long stack_idx;
@@ -14,6 +14,9 @@ long current_frame;
 atomic_long num_threads;
 
 atomic_long num_stopped;
+
+/* Thread-local mutator context */
+__thread MMTk_Mutator mutator;
 
 void *thread_entry_point(void *func_ptr)
 {
@@ -89,7 +92,7 @@ long *caml_alloc(long len, long tag)
 
 void make_static_root(long **ptr_to_var)
 {
-    mmtk_make_static_root(ptr_to_var);
+    mmtk_register_global_root(ptr_to_var);
     return;
 }
 
@@ -113,7 +116,6 @@ void toycaml_return_handler()
         atomic_fetch_add(&num_stopped, 1);
         while (wants_to_stop())
         {
-            
             if (atomic_load(&num_stopped) == atomic_load(&num_threads))
             {
                 world_has_stopped();

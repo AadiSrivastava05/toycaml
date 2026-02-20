@@ -3,5 +3,5 @@ default:
 	gcc -o test testing_toycaml_c.c runtime.c -L./mmtk-bindings/target/debug -lmmtk_toycaml
 
 clean:
-	rm test
+	rm -f test
 	cd mmtk-bindings; cargo clean

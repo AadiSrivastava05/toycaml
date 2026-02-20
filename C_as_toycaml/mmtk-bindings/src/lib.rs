@@ -1,5 +1,6 @@
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
 
+use lazy_static::lazy_static;
 use mmtk::vm::VMBinding;
 use mmtk::MMTK;
 
@@ -49,4 +50,10 @@ pub static SINGLETON: OnceLock<Box<MMTK<DummyVM>>> = OnceLock::new();
 
 fn mmtk() -> &'static MMTK<DummyVM> {
     SINGLETON.get().unwrap()
+}
+
+struct Roots(ObjectReference);
+
+lazy_static! {
+    static ref GLOBAL_ROOTS: RwLock<Vec<Roots>> = RwLock::new(Vec::new());
 }

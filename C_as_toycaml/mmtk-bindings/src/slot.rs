@@ -82,7 +82,7 @@ impl TryFrom<FieldSlot> for isize {
 /// Create a FieldSlot from an object reference
 impl From<Address> for FieldSlot {
     fn from(addr: Address) -> Self {
-        // TODO: Isfarul: Can this be ObjectReference instead?
+        // TODO(Isfarul): Can this be ObjectReference instead?
         Self {
             slot_addr: addr.to_mut_ptr(),
         }
@@ -94,7 +94,7 @@ impl TryFrom<FieldSlot> for Address {
     type Error = &'static str;
 
     fn try_from(value: FieldSlot) -> Result<Self, Self::Error> {
-        // TODO: Isfarul: Can this be ObjectReference instead?
+        // TODO(Isfarul): Can this be ObjectReference instead?
         if value.get() & 1 == 0 {
             Ok(unsafe { Address::from_usize(value.get()) })
         } else {
@@ -107,7 +107,8 @@ unsafe impl Send for FieldSlot {}
 
 /// Memory slice type with empty implementations.
 #[derive(Debug, PartialEq, Eq, Clone, Hash)]
-// TODO: Isfarul: Is this needed?
+// TODO(Isfarul): Is this needed?
+// Not atm, maybe later
 pub struct UnimplementedMemorySlice<SL: Slot = FieldSlot>(PhantomData<SL>);
 
 /// Slot iterator for `UnimplementedMemorySlice`.
