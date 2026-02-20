@@ -3,6 +3,7 @@
 
 use crate::mmtk;
 use crate::DummyVM;
+use crate::OCamlSlot;
 use crate::Roots;
 use crate::GLOBAL_ROOTS;
 use crate::SINGLETON;
@@ -81,7 +82,9 @@ pub extern "C" fn mmtk_alloc(
     {
         semantics = AllocationSemantics::Los;
     }
-    memory_manager::alloc::<DummyVM>(unsafe { &mut *mutator }, size, align, offset, semantics)
+    let alloc_addr =
+        memory_manager::alloc::<DummyVM>(unsafe { &mut *mutator }, size, align, offset, semantics);
+    alloc_addr.sub(std::mem::size_of::<OCamlSlot>())
 }
 
 #[no_mangle]
@@ -92,7 +95,7 @@ pub extern "C" fn mmtk_post_alloc(
     tag: usize,
     semantics: AllocationSemantics,
 ) {
-    let header_addr = refer.to_raw_address();
+    let header_addr = refer.to_raw_address().sub(std::mem::size_of::<OCamlSlot>());
     unsafe {
         header_addr.store(((bytes >> 8) << 10) | tag);
     }

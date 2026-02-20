@@ -2,6 +2,7 @@ use crate::DummyVM;
 use crate::OCamlSlot;
 use crate::GLOBAL_ROOTS;
 
+use mmtk::util::Address;
 use mmtk::util::opaque_pointer::*;
 use mmtk::util::ObjectReference;
 use mmtk::vm::RootsWorkFactory;
@@ -42,9 +43,9 @@ impl Scanning<DummyVM> for VMScanning {
 
         // TODO(Isfarul): move to it's own function
         let header_word: usize = unsafe { header.load() };
-        let object_size: usize = header_word >> 10;
+        let field_count: usize = header_word >> 10;
 
-        for field_idx in 0..object_size {
+        for field_idx in 0..field_count {
             let slot = addr
                 .add(field_idx * std::mem::size_of::<OCamlSlot>())
                 .into();
