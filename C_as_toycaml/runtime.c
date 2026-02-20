@@ -5,11 +5,11 @@
 #include "runtime.h"
 #include "mmtk-bindings/include/mmtk.h"
 
-long **root_stack[HEAP_SIZE];
-long stack_idx;
+__thread long **root_stack[HEAP_SIZE];
+__thread long stack_idx;
 
-long current_frame_stack_sz[HEAP_SIZE];
-long current_frame;
+__thread long current_frame_stack_sz[HEAP_SIZE];
+__thread long current_frame = 0;
 
 atomic_long num_threads;
 
@@ -70,14 +70,10 @@ void init_heap()
 
 long *caml_alloc(long len, long tag)
 {
-    if (tag >= 256)
-    {
-        printf("Error in the tag.\n");
-        exit(1);
-    }
-
     int offset = 0;
     int semantics = 0; /* 0 = AllocationSemantics::Default */
+
+    poll_for_gc();
 
     long *result = (long *)mmtk_alloc(mutator, (len + 1) * sizeof(long), sizeof(long), 0, semantics);
 
@@ -111,6 +107,12 @@ void toycaml_new_frame()
 
 void toycaml_return_handler()
 {
+    stack_idx -= (current_frame_stack_sz[current_frame]);
+    current_frame--;
+    poll_for_gc();
+}
+
+void poll_for_gc(){
     if (wants_to_stop())
     {
         atomic_fetch_add(&num_stopped, 1);

@@ -50,3 +50,6 @@ void make_root(long** ptr);
 
 /* Frame handler */
 void toycaml_new_frame();
+
+/* Poll for GC */
+void poll_for_gc();
