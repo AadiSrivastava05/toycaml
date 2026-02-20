@@ -3,6 +3,8 @@
 
 use crate::mmtk;
 use crate::DummyVM;
+use crate::Roots;
+use crate::GLOBAL_ROOTS;
 use crate::SINGLETON;
 use mmtk::memory_manager;
 use mmtk::scheduler::GCWorker;
@@ -181,4 +183,9 @@ pub extern "C" fn mmtk_starting_heap_address() -> Address {
 #[no_mangle]
 pub extern "C" fn mmtk_last_heap_address() -> Address {
     memory_manager::last_heap_address()
+}
+
+#[no_mangle]
+pub extern "C" fn mmtk_register_global_root(reff: ObjectReference) {
+    GLOBAL_ROOTS.write().unwrap().push(Roots(reff));
 }

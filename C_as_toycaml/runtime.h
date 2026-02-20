@@ -5,7 +5,7 @@
 #include <stdbool.h>
 #include "mmtk-bindings/include/mmtk.h"
 
-#define HEAP_SIZE 1024
+#define HEAP_SIZE 8192
 #define MIN_ALIGNMENT 2
 
 /* OCaml-style field access and tagging */
@@ -20,9 +20,6 @@
         return (x);                 \
     } while (0)
 #define toycaml_frame toycaml_new_frame()
-
-/* Thread-local mutator context */
-__thread MMTk_Mutator mutator;
 
 /* Internal thread wrapper to bind mutator */
 void *thread_entry_point(void *func_ptr);
