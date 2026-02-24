@@ -20,7 +20,7 @@ __thread MMTk_Mutator mutator;
 
 void *thread_entry_point(void *func_ptr)
 {
-    mutator = mmtk_bind_mutator(NULL);
+    mutator = mmtk_bind_mutator(pthread_self());
 
     void (*user_function)(void) = (void (*)(void))func_ptr;
     user_function();
