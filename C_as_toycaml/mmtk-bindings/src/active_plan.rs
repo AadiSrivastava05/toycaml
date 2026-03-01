@@ -9,6 +9,7 @@ use mmtk::Mutator;
 pub struct VMActivePlan {}
 
 struct MutatorIterator<'a> {
+    // TODO(Isfarul): Do we need the guard here??
     _guard: RwLockReadGuard<'a, HashMap<Address, MutatorState>>,
     mutators: Box<[*mut Mutator<DummyVM>]>,
     cursor: usize,
