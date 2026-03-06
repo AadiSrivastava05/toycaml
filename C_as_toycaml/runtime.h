@@ -5,11 +5,11 @@
 #include <stdbool.h>
 #include "mmtk-bindings/include/mmtk.h"
 
-#define HEAP_SIZE 8192
+#define HEAP_SIZE (1024 * 1024 * 32)
 #define MIN_ALIGNMENT 2
 
 /* OCaml-style field access and tagging */
-#define Field(ptr, offset) ((long *)ptr)[offset]
+#define Field(ptr, offset) ((long *)ptr)[offset] 
 #define long2val(x) ((x << 1) + 1)
 #define val2long(x) (x >> 1)
 
@@ -20,6 +20,10 @@
         return (x);                 \
     } while (0)
 #define toycaml_frame toycaml_new_frame()
+
+// below are for semi_space_gc.c
+extern atomic_long num_threads;
+extern atomic_long num_stopped;
 
 /* Internal thread wrapper to bind mutator */
 void *thread_entry_point(void *func_ptr);
