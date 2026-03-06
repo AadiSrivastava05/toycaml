@@ -3,8 +3,10 @@
 
 use crate::mmtk;
 use crate::DummyVM;
+use crate::OCamlSlot;
 use crate::Roots;
 use crate::GLOBAL_ROOTS;
+use crate::MUTATORS;
 use crate::SINGLETON;
 use mmtk::memory_manager;
 use mmtk::scheduler::GCWorker;
@@ -15,6 +17,8 @@ use mmtk::AllocationSemantics;
 use mmtk::Mutator;
 use std::ffi::c_char;
 use std::ffi::CStr;
+use std::mem;
+use std::sync::atomic::AtomicUsize;
 
 // This file exposes MMTk Rust API to the native code. This is not an exhaustive list of all the APIs.
 // Most commonly used APIs are listed in https://docs.mmtk.io/api/mmtk/memory_manager/index.html. The binding can expose them here.
@@ -52,12 +56,29 @@ pub fn mmtk_init(heap_size: u32, plan: *const c_char) {
 }
 
 #[no_mangle]
-pub extern "C" fn mmtk_bind_mutator(tls: VMMutatorThread) -> *mut Mutator<DummyVM> {
-    Box::into_raw(memory_manager::bind_mutator(mmtk(), tls))
+pub extern "C" fn mmtk_bind_mutator(
+    tls: VMMutatorThread,
+    base: Address,
+    size: *mut AtomicUsize,
+) -> *mut Mutator<DummyVM> {
+    let mut mutator = memory_manager::bind_mutator(mmtk(), tls);
+    MUTATORS.write().unwrap().insert(
+        tls.0 .0.to_address(),
+        crate::MutatorState {
+            size,
+            base,
+            mutator: mutator.as_mut() as *mut Mutator<DummyVM>,
+        },
+    );
+    Box::into_raw(mutator)
 }
 
 #[no_mangle]
 pub extern "C" fn mmtk_destroy_mutator(mutator: *mut Mutator<DummyVM>) {
+    MUTATORS
+        .write()
+        .unwrap()
+        .remove(unsafe { &mutator.as_mut().unwrap().mutator_tls.0 .0.to_address() });
     // notify mmtk-core about destroyed mutator
     memory_manager::destroy_mutator(unsafe { &mut *mutator });
     // turn the ptr back to a box, and let Rust properly reclaim it
@@ -81,7 +102,9 @@ pub extern "C" fn mmtk_alloc(
     {
         semantics = AllocationSemantics::Los;
     }
-    memory_manager::alloc::<DummyVM>(unsafe { &mut *mutator }, size, align, offset, semantics)
+    let alloc_addr =
+        memory_manager::alloc::<DummyVM>(unsafe { &mut *mutator }, size, align, offset, semantics);
+    alloc_addr.add(mem::size_of::<OCamlSlot>())
 }
 
 #[no_mangle]
@@ -92,7 +115,8 @@ pub extern "C" fn mmtk_post_alloc(
     tag: usize,
     semantics: AllocationSemantics,
 ) {
-    let header_addr = refer.to_raw_address();
+    let header_addr = refer.to_raw_address().sub(mem::size_of::<OCamlSlot>());
+    // TODO(Isfarul): safety
     unsafe {
         header_addr.store(((bytes >> 8) << 10) | tag);
     }

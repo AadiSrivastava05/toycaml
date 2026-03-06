@@ -26,7 +26,11 @@ extern bool wants_to_stop();
 extern void mmtk_init(uint32_t heap_size, char *plan);
 
 // Request MMTk to create a new mutator for the given `tls` thread
-extern MMTk_Mutator mmtk_bind_mutator(void* tls);
+// The stack base does not need to be atomic, since it never changes
+// stack_size_ptr is atomic to ensure cross thread visibility on Rust's side
+// since MMTk can spawn many threads, all of them must to an atomic load to
+// properly see the value written by the mutator thread
+extern MMTk_Mutator mmtk_bind_mutator(void* tls, void *stack_base, _Atomic size_t *stack_size_ptr);
 
 // Reclaim mutator that is no longer needed
 extern void mmtk_destroy_mutator(MMTk_Mutator mutator);

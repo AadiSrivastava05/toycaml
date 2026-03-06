@@ -6,7 +6,7 @@
 #include "mmtk-bindings/include/mmtk.h"
 
 __thread long **root_stack[HEAP_SIZE];
-__thread long stack_idx;
+__thread _Atomic long stack_idx;
 
 __thread long current_frame_stack_sz[HEAP_SIZE];
 __thread long current_frame = 0;
@@ -20,7 +20,7 @@ __thread MMTk_Mutator mutator;
 
 void *thread_entry_point(void *func_ptr)
 {
-    mutator = mmtk_bind_mutator(pthread_self());
+    mutator = mmtk_bind_mutator(pthread_self(), root_stack, &stack_idx);
 
     void (*user_function)(void) = (void (*)(void))func_ptr;
     user_function();
@@ -65,7 +65,7 @@ void init_heap()
     atomic_init(&num_stopped, 0);
 
     mmtk_init(HEAP_SIZE * sizeof(long), "immix");
-    mutator = mmtk_bind_mutator(NULL);
+    mutator = mmtk_bind_mutator(NULL, root_stack, &stack_idx);
 }
 
 long *caml_alloc(long len, long tag)

@@ -1,8 +1,10 @@
+use std::collections::HashMap;
+use std::sync::atomic::AtomicUsize;
 use std::sync::{OnceLock, RwLock};
 
 use lazy_static::lazy_static;
 use mmtk::vm::VMBinding;
-use mmtk::MMTK;
+use mmtk::{Mutator, MMTK};
 
 pub mod active_plan;
 pub mod api;
@@ -54,6 +56,19 @@ fn mmtk() -> &'static MMTK<DummyVM> {
 
 struct Roots(ObjectReference);
 
+// TODO(Isfarul): what else to use here?
+struct MutatorState {
+    size: *mut AtomicUsize,
+    base: Address,
+    mutator: *mut Mutator<DummyVM>,
+}
+
+// TODO(Isfarul): Safety
+unsafe impl Sync for MutatorState {}
+unsafe impl Send for MutatorState {}
+
+
 lazy_static! {
     static ref GLOBAL_ROOTS: RwLock<Vec<Roots>> = RwLock::new(Vec::new());
+    static ref MUTATORS: RwLock<HashMap<Address, MutatorState>> = RwLock::new(HashMap::new());
 }
