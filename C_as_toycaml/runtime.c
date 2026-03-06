@@ -3,7 +3,6 @@
 #include <stdlib.h>
 #include <stdatomic.h>
 #include "runtime.h"
-#include "mmtk-bindings/include/mmtk.h"
 
 __thread long **root_stack[HEAP_SIZE];
 __thread long stack_idx;
@@ -20,10 +19,18 @@ __thread MMTk_Mutator mutator;
 
 void *thread_entry_point(void *func_ptr)
 {
-    mutator = mmtk_bind_mutator(pthread_self());
+    mutator = mutator = mmtk_bind_mutator((void*)(uintptr_t)pthread_self());
 
     void (*user_function)(void) = (void (*)(void))func_ptr;
     user_function();
+
+    mmtk_destroy_mutator(mutator);
+
+    atomic_fetch_sub(&num_threads, 1);
+
+    if (wants_to_stop() && atomic_load(&num_stopped) == atomic_load(&num_threads)) {
+        world_has_stopped();
+    }
 
     return NULL;
 }
@@ -33,7 +40,7 @@ pthread_t domain_spawn(void *function)
     pthread_t pid;
 
     atomic_fetch_add(&num_threads, 1);
-
+    
     if (pthread_create(&pid, NULL, thread_entry_point, function) != 0)
     {
         atomic_fetch_sub(&num_threads, 1);
@@ -46,9 +53,14 @@ pthread_t domain_spawn(void *function)
 
 void domain_join(pthread_t pid)
 {
-
-    pthread_join(pid, NULL);
+    
     atomic_fetch_sub(&num_threads, 1);
+    if (wants_to_stop() && atomic_load(&num_stopped) == atomic_load(&num_threads)) {
+        extern void world_has_stopped(void);
+        world_has_stopped();
+    }
+    pthread_join(pid, NULL);
+    atomic_fetch_add(&num_threads, 1); // because sleeping thread will break stop the world logic if included in total threads
 
 }
 
@@ -75,15 +87,15 @@ long *caml_alloc(long len, long tag)
 
     poll_for_gc();
 
-    long *result = (long *)mmtk_alloc(mutator, (len + 1) * sizeof(long), sizeof(long), 0, semantics);
+    // long *result = (long *)mmtk_alloc(mutator, (len + 1) * sizeof(long), sizeof(long), 0, semantics);
+    long *result = (long *)mmtk_alloc(mutator, (len + 2) * sizeof(long), sizeof(long), 0, semantics); // extra slots for header and forwarding pointer
 
-    mmtk_post_alloc(mutator, result, len * sizeof(long), tag, semantics);
-    for (int i = 1; i <= len; i++)
-    {
-        Field(result, i) = 1;
+    mmtk_post_alloc(mutator, result, (len+2) * sizeof(long), tag, semantics);
+    long *obj_body = result + 2;
+    for (int i = 0; i < len; i++) {
+        obj_body[i] = 1; // Correctly fills fields 0 to len-1
     }
-
-    return result;
+    return obj_body;
 }
 
 void make_static_root(long **ptr_to_var)

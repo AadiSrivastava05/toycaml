@@ -1,0 +1,1 @@
+gcc runtime.c semi_space_gc.c tests/binary_tree.c -o toycaml_gc
