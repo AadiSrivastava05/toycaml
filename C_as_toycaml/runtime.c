@@ -19,18 +19,22 @@ __thread MMTk_Mutator mutator;
 
 void *thread_entry_point(void *func_ptr)
 {
+    poll_for_gc();
     mutator = mutator = mmtk_bind_mutator((void*)(uintptr_t)pthread_self());
+    poll_for_gc();
 
     void (*user_function)(void) = (void (*)(void))func_ptr;
     user_function();
+    poll_for_gc();
 
     mmtk_destroy_mutator(mutator);
 
     atomic_fetch_sub(&num_threads, 1);
 
-    if (wants_to_stop() && atomic_load(&num_stopped) == atomic_load(&num_threads)) {
-        world_has_stopped();
-    }
+    // if (wants_to_stop() && atomic_load(&num_stopped) == atomic_load(&num_threads)) {
+    //     world_has_stopped();
+    // }
+    poll_for_gc();
 
     return NULL;
 }
@@ -39,6 +43,7 @@ pthread_t domain_spawn(void *function)
 {
     pthread_t pid;
 
+    poll_for_gc();
     atomic_fetch_add(&num_threads, 1);
     
     if (pthread_create(&pid, NULL, thread_entry_point, function) != 0)
@@ -48,17 +53,19 @@ pthread_t domain_spawn(void *function)
         exit(1);
     }
 
+    poll_for_gc();
+
     return pid;
 }
 
 void domain_join(pthread_t pid)
 {
     
+    // if (wants_to_stop() && atomic_load(&num_stopped) == atomic_load(&num_threads)) {
+        //     world_has_stopped();
+        // }
+    poll_for_gc();
     atomic_fetch_sub(&num_threads, 1);
-    if (wants_to_stop() && atomic_load(&num_stopped) == atomic_load(&num_threads)) {
-        extern void world_has_stopped(void);
-        world_has_stopped();
-    }
     pthread_join(pid, NULL);
     atomic_fetch_add(&num_threads, 1); // because sleeping thread will break stop the world logic if included in total threads
 

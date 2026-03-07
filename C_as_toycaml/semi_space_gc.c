@@ -17,10 +17,11 @@ typedef intptr_t value;
 value* to_heap;
 value* from_heap;
 value heap_sz;
-value cur_heap_ptr;
+atomic_size_t cur_heap_ptr;
 
 pthread_mutex_t alloc_lock = PTHREAD_MUTEX_INITIALIZER;
 
+atomic_flag gc_thread_spawned = ATOMIC_FLAG_INIT;
 
 void* static_roots[MAX_STATIC_ROOTS];
 atomic_int static_root_count = 0;
@@ -39,7 +40,7 @@ static atomic_bool gc_requested = false;
 static atomic_bool world_is_ready = false;
 static atomic_bool is_gc_active = false; 
 
-void semi_space_collection(void);
+void* semi_space_collection(void*);
 
 void world_has_stopped(){
     atomic_store(&world_is_ready, true);
@@ -89,79 +90,44 @@ void mmtk_destroy_mutator(MMTk_Mutator mutator) {
 
 // Allocate memory for an object
 void* mmtk_alloc(MMTk_Mutator mutator, size_t size, size_t align, size_t offset, int allocator) {
-    pthread_mutex_lock(&alloc_lock);
 
     if (cur_heap_ptr + size > heap_sz) {
-        // Elect a GC Leader. The first thread to flip this to 'true' wins.
-        if (!atomic_exchange(&is_gc_active, true)) {
-            
-            // GC LEADER
-            pthread_mutex_unlock(&alloc_lock); 
-
-            atomic_store(&gc_requested, true); 
-
-            // the leader must count itself as stopped, 
-            // otherwise num_stopped will never equal num_threads!
-            atomic_fetch_add(&num_stopped, 1);
-
-            if (atomic_load(&num_stopped) == atomic_load(&num_threads)) {
-                world_has_stopped();
-            }
-
-            // wait for all mutators (followers) to arrive at the safepoint
-            while (!atomic_load(&world_is_ready)) {
-                // Spinning
-            }
-
-            // Run the actual garbage collection
-            semi_space_collection();
-
-            // Release the mutators
-            atomic_store(&world_is_ready, false);
-            atomic_store(&gc_requested, false);
-            
-            // Leader removes itself from the stopped count
-            atomic_fetch_sub(&num_stopped, 1);
-            
-            // Open for future GCs
-            atomic_store(&is_gc_active, false);
-            
-            pthread_mutex_lock(&alloc_lock);
-
-            // check if we survived OOM
-            if (cur_heap_ptr + size > heap_sz) {
-                pthread_mutex_unlock(&alloc_lock);
-                fprintf(stderr, "FATAL: Out of Memory after GC (Leader).\n");
-                exit(1); 
-            }
-
-        } else {
-            // Someone else is already running the GC
-            pthread_mutex_unlock(&alloc_lock);
-            
-            // Wait to ensure the leader has flipped gc_requested to true
-            while (!atomic_load(&gc_requested));
-            
-            // Join the safepoint and sleep exactly like normal threads
-            poll_for_gc();
-            
-            // Wake up and re-acquire lock to attempt allocation again
-            pthread_mutex_lock(&alloc_lock);
-            
-            // Check if the leader managed to free enough space for me
-            if (cur_heap_ptr + size > heap_sz) {
-                pthread_mutex_unlock(&alloc_lock);
-                fprintf(stderr, "FATAL: Out of Memory after GC (Follower).\n");
+        
+        while (atomic_load(&num_stopped) > 0);
+        
+        atomic_store(&gc_requested, true);
+        
+        if(!atomic_flag_test_and_set(&gc_thread_spawned)){
+            pthread_t pid;
+            if (pthread_create(&pid, NULL, (semi_space_collection), NULL) != 0){
+                perror("Failed to spawn gc thread");
                 exit(1);
             }
+            poll_for_gc();
+            pthread_join(pid, NULL);
+            atomic_flag_clear(&gc_thread_spawned);
         }
+
+        poll_for_gc();
+
+        
+        // check if we survived OOM
+        if (cur_heap_ptr + size > heap_sz) {
+            fprintf(stderr, "FATAL: Out of Memory after GC.\n");
+            exit(1); 
+        }
+        
+        
     }
     
-    // Actual bump-pointer allocation (Guaranteed space at this line)
-    void* ptr = (void*)((uintptr_t)from_heap + cur_heap_ptr);
-    cur_heap_ptr += size;
+    size_t old_ptr = atomic_fetch_add(&cur_heap_ptr, size);
+    if (old_ptr > heap_sz) {
+        atomic_fetch_add(&cur_heap_ptr, -size);
+        fprintf(stderr, "FATAL: Out of Memory after GC.\n");
+        exit(1); 
+    }
     
-    pthread_mutex_unlock(&alloc_lock);
+    void* ptr = (void*)((uintptr_t)from_heap + old_ptr);
     return ptr;
 }
 
@@ -226,7 +192,10 @@ value copy(value v, value** free_ptr_ref){
     return (value)(new_v + 2);
 }
 
-void semi_space_collection(){
+void* semi_space_collection(void*){
+    while (!atomic_load(&world_is_ready)) {
+            // Spinning
+    }
     printf("\n[GC] Collection Started. Used bytes: %zu\n", cur_heap_ptr);
     value* free_ptr = to_heap;
     value* scan_ptr = to_heap;
@@ -270,6 +239,8 @@ void semi_space_collection(){
 
     cur_heap_ptr = (free_ptr - from_heap) * sizeof(value);
     printf("[GC] Collection Finished. Used bytes after compaction: %zu\n", cur_heap_ptr);
+    atomic_store(&gc_requested, false);
+    atomic_store(&world_is_ready, false);
 }
 
 void mmtk_register_global_root(void *ref) {
