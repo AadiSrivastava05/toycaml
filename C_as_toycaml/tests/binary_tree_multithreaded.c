@@ -13,6 +13,7 @@ long* mk() {
     for (int i = 0; i < 128; i++) {
         Field(arr, i) = long2val(0); 
     }
+    make_return_root(&arr);
     toycaml_return(arr);
 }
 
@@ -26,6 +27,7 @@ long* make(int d) {
         Field(node, 0) = (long)EMPTY;
         Field(node, 1) = (long)data;
         Field(node, 2) = (long)EMPTY;
+        make_return_root(&node);
         toycaml_return(node);
     } 
     else {
@@ -40,6 +42,7 @@ long* make(int d) {
         Field(node, 0) = (long)left;
         Field(node, 1) = (long)data;
         Field(node, 2) = (long)right;
+        make_return_root(&node);
         toycaml_return(node);
     }
 }

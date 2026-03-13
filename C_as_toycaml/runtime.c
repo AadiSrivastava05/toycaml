@@ -10,31 +10,42 @@ __thread long stack_idx;
 __thread long current_frame_stack_sz[HEAP_SIZE];
 __thread long current_frame = 0;
 
-atomic_long num_threads;
+__thread long* gc_retval = NULL;
 
-atomic_long num_stopped;
+STW_State stw_state = {
+    .lock = PTHREAD_MUTEX_INITIALIZER,
+    .gc_off = PTHREAD_COND_INITIALIZER,
+    .world_stopped = PTHREAD_COND_INITIALIZER,
+    .resume_world = PTHREAD_COND_INITIALIZER,
+    .num_threads = 1, // Main thread starts as 1
+    .num_stopped = 0,
+    .gc_requested = false,
+    .world_has_stopped = false
+};
 
 /* Thread-local mutator context */
 __thread MMTk_Mutator mutator;
 
 void *thread_entry_point(void *func_ptr)
 {
-    poll_for_gc();
-    mutator = mutator = mmtk_bind_mutator((void*)(uintptr_t)pthread_self());
-    poll_for_gc();
+    // poll_for_gc();
+    mutator = mmtk_bind_mutator((void*)(uintptr_t)pthread_self());
+    // poll_for_gc();
 
     void (*user_function)(void) = (void (*)(void))func_ptr;
     user_function();
-    poll_for_gc();
+    // poll_for_gc();
 
     mmtk_destroy_mutator(mutator);
 
-    atomic_fetch_sub(&num_threads, 1);
-
-    // if (wants_to_stop() && atomic_load(&num_stopped) == atomic_load(&num_threads)) {
-    //     world_has_stopped();
-    // }
-    poll_for_gc();
+    pthread_mutex_lock(&stw_state.lock);
+    stw_state.num_threads--;
+    if (stw_state.gc_requested && stw_state.num_stopped == stw_state.num_threads) {
+        stw_state.world_has_stopped = true;
+        pthread_cond_broadcast(&stw_state.world_stopped);
+    }
+    pthread_mutex_unlock(&stw_state.lock);
+    // poll_for_gc();
 
     return NULL;
 }
@@ -44,11 +55,15 @@ pthread_t domain_spawn(void *function)
     pthread_t pid;
 
     poll_for_gc();
-    atomic_fetch_add(&num_threads, 1);
+    pthread_mutex_lock(&stw_state.lock);
+    stw_state.num_threads++;
+    pthread_mutex_unlock(&stw_state.lock);
     
     if (pthread_create(&pid, NULL, thread_entry_point, function) != 0)
     {
-        atomic_fetch_sub(&num_threads, 1);
+        pthread_mutex_lock(&stw_state.lock);
+        stw_state.num_threads--;
+        pthread_mutex_unlock(&stw_state.lock);
         perror("Failed to spawn");
         exit(1);
     }
@@ -61,13 +76,22 @@ pthread_t domain_spawn(void *function)
 void domain_join(pthread_t pid)
 {
     
-    // if (wants_to_stop() && atomic_load(&num_stopped) == atomic_load(&num_threads)) {
-        //     world_has_stopped();
-        // }
     poll_for_gc();
-    atomic_fetch_sub(&num_threads, 1);
+    pthread_mutex_lock(&stw_state.lock);
+    stw_state.num_threads--; // because sleeping thread will break stop the world logic if included in total threads
+    if (stw_state.gc_requested && stw_state.num_stopped == stw_state.num_threads) {
+        stw_state.world_has_stopped = true; 
+        pthread_cond_broadcast(&stw_state.world_stopped);
+    }
+    pthread_mutex_unlock(&stw_state.lock);
+    
     pthread_join(pid, NULL);
-    atomic_fetch_add(&num_threads, 1); // because sleeping thread will break stop the world logic if included in total threads
+    pthread_mutex_lock(&stw_state.lock);
+    stw_state.num_threads++;
+    pthread_mutex_unlock(&stw_state.lock);
+    
+    poll_for_gc();
+
 
 }
 
@@ -80,9 +104,6 @@ long *get_stack_ptr()
 
 void init_heap()
 {
-    atomic_init(&num_threads, 1);
-    atomic_init(&num_stopped, 0);
-
     mmtk_init(HEAP_SIZE * sizeof(long), "immix");
     mutator = mmtk_bind_mutator(NULL);
 }
@@ -93,14 +114,13 @@ long *caml_alloc(long len, long tag)
     int semantics = 0; /* 0 = AllocationSemantics::Default */
 
     poll_for_gc();
-
-    // long *result = (long *)mmtk_alloc(mutator, (len + 1) * sizeof(long), sizeof(long), 0, semantics);
+    
     long *result = (long *)mmtk_alloc(mutator, (len + 2) * sizeof(long), sizeof(long), 0, semantics); // extra slots for header and forwarding pointer
 
     mmtk_post_alloc(mutator, result, (len+2) * sizeof(long), tag, semantics);
     long *obj_body = result + 2;
     for (int i = 0; i < len; i++) {
-        obj_body[i] = 1; // Correctly fills fields 0 to len-1
+        obj_body[i] = 1; 
     }
     return obj_body;
 }
@@ -118,6 +138,12 @@ void make_root(long **ptr_to_var)
     return;
 }
 
+void make_return_root(long **ptr_to_var)
+{
+    gc_retval = *ptr_to_var;
+    return;
+}
+
 void toycaml_new_frame()
 {
     current_frame++;
@@ -126,22 +152,47 @@ void toycaml_new_frame()
 
 void toycaml_return_handler()
 {
+    toycaml_return_with_val(NULL);
+}
+
+long* toycaml_return_with_val(long* val) {
     stack_idx -= (current_frame_stack_sz[current_frame]);
     current_frame--;
     poll_for_gc();
+    long* ret = gc_retval;
+    gc_retval = NULL;
+    return ret ? ret : val;
 }
 
 void poll_for_gc(){
-    if (wants_to_stop())
-    {
-        atomic_fetch_add(&num_stopped, 1);
-        while (wants_to_stop())
-        {
-            if (atomic_load(&num_stopped) == atomic_load(&num_threads))
-            {
-                world_has_stopped();
-            }
+    pthread_mutex_lock(&stw_state.lock);
+    if(stw_state.gc_requested){
+        // printf("\n[GC] GC Requested. I am stopping\n");
+        stw_state.num_stopped++;
+        
+        if(stw_state.num_stopped == stw_state.num_threads){
+            stw_state.world_has_stopped = true;
+            pthread_cond_broadcast(&stw_state.world_stopped);
         }
-        atomic_fetch_sub(&num_stopped, 1);
+        
+        while(stw_state.gc_requested){
+            pthread_cond_wait(&stw_state.gc_off, &stw_state.lock);
+        }
+        
+        // printf("\n[GC] GC Ended. I am waiting to resume\n");
+        stw_state.num_stopped--;
+        if(stw_state.num_stopped == 0){
+            // printf("\n[GC] GC Ended. And I am the last to leave, so everyone can resume now.\n");
+            stw_state.world_has_stopped = false;
+            pthread_cond_broadcast(&stw_state.resume_world);
+        }
+        else{
+            while(stw_state.world_has_stopped){
+                pthread_cond_wait(&stw_state.resume_world, &stw_state.lock);
+            }
+            // printf("\n[GC] World can resume. I am now resuming\n");
+        }
+        // printf("\n[GC] Now I resumed.\n");
     }
+    pthread_mutex_unlock(&stw_state.lock);
 }

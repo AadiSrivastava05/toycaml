@@ -13,17 +13,22 @@
 #define long2val(x) ((x << 1) + 1)
 #define val2long(x) (x >> 1)
 
-/* Safepoint and return handling */
+/* return handling */
 #define toycaml_return(x)           \
-    do {                            \
-        toycaml_return_handler();   \
-        return (x);                 \
-    } while (0)
+    return (typeof(x))toycaml_return_with_val((long*)(x))
 #define toycaml_frame toycaml_new_frame()
 
 // below are for semi_space_gc.c
-extern atomic_long num_threads;
-extern atomic_long num_stopped;
+typedef struct {
+    pthread_mutex_t lock;
+    pthread_cond_t gc_off;
+    pthread_cond_t world_stopped;
+    pthread_cond_t resume_world;
+    long num_threads;
+    long num_stopped;
+    bool gc_requested;
+    bool world_has_stopped;
+} STW_State;
 
 /* Internal thread wrapper to bind mutator */
 void *thread_entry_point(void *func_ptr);
@@ -49,8 +54,14 @@ void make_static_root(long **ptr_to_var);
 /* Blocks thread if GC is requested (STW) */
 void toycaml_return_handler();
 
+/* Blocks thread if GC is requested, returns updated pointer if GC moved it */
+long* toycaml_return_with_val(long* val);
+
 /* Adds frame specific roots */
 void make_root(long** ptr);
+
+/* Adds return value root */
+void make_return_root(long** ptr);
 
 /* Frame handler */
 void toycaml_new_frame();
