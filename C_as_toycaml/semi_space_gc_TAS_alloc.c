@@ -19,7 +19,7 @@ extern STW_State stw_state;
 value* to_heap;
 value* from_heap;
 value heap_sz;
-long cur_heap_ptr;
+_Atomic(value) cur_heap_ptr;
 
 void* static_roots[MAX_STATIC_ROOTS];
 atomic_int static_root_count = 0;
@@ -30,12 +30,70 @@ typedef struct {
     long *stack_idx_ptr;    // Pointer to the thread's stack_idx
     long **gc_retval_ptr;   // Pointer to the thread's return value
     atomic_bool is_active;  // if we can scan the stack or not
+    _Atomic(value) page_cursor;
+    _Atomic(value) page_end;
+    _Atomic(value) page_limit;
 } ThreadRegistry;
 
 ThreadRegistry registry[MAX_THREADS];
 atomic_int registered_threads = 0; // id for mutators taken from counter
 
 void* semi_space_collection(void*);
+
+static void clamp_all_active_pages(void) {
+    int total_threads = atomic_load(&registered_threads);
+    for (int i = 0; i < total_threads; i++) {
+        if (!atomic_load(&registry[i].is_active)) continue;
+        value cursor = atomic_load(&registry[i].page_cursor);
+        atomic_store(&registry[i].page_limit, cursor);
+    }
+}
+
+static void reset_all_thread_pages(void) {
+    int total_threads = atomic_load(&registered_threads);
+    for (int i = 0; i < total_threads; i++) {
+        atomic_store(&registry[i].page_cursor, 0);
+        atomic_store(&registry[i].page_end, 0);
+        atomic_store(&registry[i].page_limit, 0);
+    }
+}
+
+static bool reserve_thread_page(int id, value request_bytes) {
+    value preferred = PAGE_BYTES;
+    if (request_bytes > preferred) preferred = request_bytes;
+
+    while (1) {
+        value old_ptr = atomic_load(&cur_heap_ptr);
+        if (old_ptr >= heap_sz) return false;
+
+        value remaining = heap_sz - old_ptr;
+        if (remaining < request_bytes) return false;
+
+        value chunk = preferred;
+        if (chunk > remaining) chunk = remaining;
+
+        value new_ptr = old_ptr + chunk;
+        if (atomic_compare_exchange_weak(&cur_heap_ptr, &old_ptr, new_ptr)) {
+            atomic_store(&registry[id].page_cursor, old_ptr);
+            atomic_store(&registry[id].page_end, old_ptr + chunk);
+            atomic_store(&registry[id].page_limit, old_ptr + chunk);
+            return true;
+        }
+    }
+}
+
+static void* try_alloc_from_thread_page(int id, value request_bytes) {
+    value cursor = atomic_load(&registry[id].page_cursor);
+    value end = atomic_load(&registry[id].page_end);
+    value limit = atomic_load(&registry[id].page_limit);
+
+    if (cursor > end || end > limit) return NULL;
+    if (request_bytes > (end - cursor)) return NULL;
+    if (request_bytes > (limit - cursor)) return NULL;
+
+    atomic_store(&registry[id].page_cursor, cursor + request_bytes);
+    return (void*)((uintptr_t)from_heap + (uintptr_t)cursor);
+}
 
 // Initialize an MMTk instance
 void mmtk_init(uint32_t heap_size, char *plan){
@@ -50,7 +108,7 @@ void mmtk_init(uint32_t heap_size, char *plan){
         exit(1);
     }
 
-    cur_heap_ptr = 0;
+    atomic_store(&cur_heap_ptr, 0);
 }
 
 // Request MMTk to create a new mutator for the given `tls` thread
@@ -70,6 +128,9 @@ MMTk_Mutator mmtk_bind_mutator(void* tls) {
     registry[id].root_stack_ptr = (long***)root_stack;
     registry[id].stack_idx_ptr = &stack_idx;
     atomic_store(&registry[id].is_active, true);
+    atomic_store(&registry[id].page_cursor, 0);
+    atomic_store(&registry[id].page_end, 0);
+    atomic_store(&registry[id].page_limit, 0);
     
     return (MMTk_Mutator)(intptr_t)id; 
 }
@@ -78,11 +139,24 @@ MMTk_Mutator mmtk_bind_mutator(void* tls) {
 void mmtk_destroy_mutator(MMTk_Mutator mutator) {
     int id = (int)(intptr_t)mutator;
     atomic_store(&registry[id].is_active, false);
+    atomic_store(&registry[id].page_cursor, 0);
+    atomic_store(&registry[id].page_end, 0);
+    atomic_store(&registry[id].page_limit, 0);
 }
 
 
 // Allocate memory for an object
 void* mmtk_alloc(MMTk_Mutator mutator, size_t size, size_t align, size_t offset, int allocator) {
+    int id = (int)(intptr_t)mutator;
+    value request_bytes = (value)size;
+
+    void* fast_ptr = try_alloc_from_thread_page(id, request_bytes);
+    if (fast_ptr != NULL) return fast_ptr;
+
+    if (reserve_thread_page(id, request_bytes)) {
+        fast_ptr = try_alloc_from_thread_page(id, request_bytes);
+        if (fast_ptr != NULL) return fast_ptr;
+    }
 
     pthread_mutex_lock(&stw_state.lock);
     if(stw_state.gc_requested){
@@ -107,13 +181,22 @@ void* mmtk_alloc(MMTk_Mutator mutator, size_t size, size_t align, size_t offset,
                 pthread_cond_wait(&stw_state.resume_world, &stw_state.lock);
             }
         }
+
+        if (reserve_thread_page(id, request_bytes)) {
+            fast_ptr = try_alloc_from_thread_page(id, request_bytes);
+            if (fast_ptr != NULL) {
+                pthread_mutex_unlock(&stw_state.lock);
+                return fast_ptr;
+            }
+        }
     }
 
-    if (cur_heap_ptr + size > heap_sz) {
+    if (!reserve_thread_page(id, request_bytes)) {
         // printf("\n[GC] I am requesting GC.\n");
         stw_state.num_stopped++;
         stw_state.gc_requested = true;
         stw_state.world_has_stopped = false;
+        clamp_all_active_pages();
         
         if(stw_state.num_stopped == stw_state.num_threads){
             stw_state.world_has_stopped = true;
@@ -152,7 +235,7 @@ void* mmtk_alloc(MMTk_Mutator mutator, size_t size, size_t align, size_t offset,
         // printf("\n[GC] I requested GC, and I resumed.\n");
         
         // check if we survived OOM
-        if (cur_heap_ptr + size > heap_sz) {
+        if (!reserve_thread_page(id, request_bytes)) {
             stw_state.num_threads--;
             pthread_mutex_unlock(&stw_state.lock);
             fprintf(stderr, "FATAL: Out of Memory after GC.\n");
@@ -162,18 +245,16 @@ void* mmtk_alloc(MMTk_Mutator mutator, size_t size, size_t align, size_t offset,
         
     }
     
-    if (cur_heap_ptr + size > heap_sz) {
+    fast_ptr = try_alloc_from_thread_page(id, request_bytes);
+    if (fast_ptr == NULL) {
         stw_state.num_threads--;
         pthread_mutex_unlock(&stw_state.lock);
         fprintf(stderr, "FATAL: Out of Memory after GC.\n");
         exit(1); 
     }
-    
-    void* ptr = (void*)((uintptr_t)from_heap + cur_heap_ptr);
-    cur_heap_ptr += size;
-    
+
     pthread_mutex_unlock(&stw_state.lock);
-    return ptr;
+    return fast_ptr;
 }
 
 // perform post-allocation hooks or actions such as initializing object metadata
@@ -193,12 +274,13 @@ void mmtk_post_alloc(MMTk_Mutator mutator,
 
 // return the current amount of used memory in bytes
 size_t mmtk_used_bytes(){
-    return cur_heap_ptr;
+    return (size_t)atomic_load(&cur_heap_ptr);
 }
 
 // return the current amount of free memory in bytes
 size_t mmtk_free_bytes(){
-    return (heap_sz-cur_heap_ptr);
+    value used = atomic_load(&cur_heap_ptr);
+    return (size_t)(heap_sz - used);
 }
 
 // return the current amount of total memory in bytes
@@ -238,7 +320,7 @@ value copy(value v, value** free_ptr_ref){
 }
 
 void* semi_space_collection(void*){
-    printf("\n[GC] Collection Started. Used bytes: %zu\n", cur_heap_ptr);
+    printf("\n[GC] Collection Started. Used bytes: %zu\n", (size_t)atomic_load(&cur_heap_ptr));
     value* free_ptr = to_heap;
     value* scan_ptr = to_heap;
 
@@ -283,8 +365,9 @@ void* semi_space_collection(void*){
     from_heap = to_heap;
     to_heap = temp;
 
-    cur_heap_ptr = (free_ptr - from_heap) * sizeof(value);
-    printf("[GC] Collection Finished. Used bytes after compaction: %zu\n", cur_heap_ptr);
+    atomic_store(&cur_heap_ptr, (value)((free_ptr - from_heap) * sizeof(value)));
+    reset_all_thread_pages();
+    printf("[GC] Collection Finished. Used bytes after compaction: %zu\n", (size_t)atomic_load(&cur_heap_ptr));
 
     return NULL;
 }

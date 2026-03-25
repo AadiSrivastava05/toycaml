@@ -4,10 +4,10 @@
 #include <stdatomic.h>
 #include "runtime.h"
 
-__thread long **root_stack[HEAP_SIZE];
+__thread long **root_stack[ROOT_STACK_SIZE];
 __thread long stack_idx;
 
-__thread long current_frame_stack_sz[HEAP_SIZE];
+__thread long current_frame_stack_sz[ROOT_STACK_SIZE];
 __thread long current_frame = 0;
 
 __thread long* gc_retval = NULL;
