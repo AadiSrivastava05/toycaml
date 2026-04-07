@@ -184,11 +184,9 @@ void mmtk_post_alloc(MMTk_Mutator mutator,
                             int allocator)
 {
     value* header_ptr = (value*)refer;
-    // store total words (including header and forwarding slot)
+    // store total words (including header)
     long total_words = bytes / sizeof(value);
     *header_ptr = (total_words << 10) | (tag & 0x3FF); 
-    
-    *(header_ptr + 1) = 0;
 }
 
 // return the current amount of used memory in bytes
@@ -213,11 +211,11 @@ value copy(value v, value** free_ptr_ref){
     // is it actually IN the from_heap?
     if(v < (value)from_heap || v >= (value)from_heap + heap_sz) return v;
 
-    value* full_v = (value*)v - 2;
+    value* full_v = (value*)v - 1;
 
     // already forwarded?
-    if(full_v[1] != 0){
-        return (value)((value*)full_v[1] + 2); 
+    if(full_v[0] == 0){
+        return full_v[1];
     }
 
     value header = full_v[0];
@@ -231,10 +229,11 @@ value copy(value v, value** free_ptr_ref){
     // update the caller's free_ptr
     *free_ptr_ref += tot_words;
 
-    // leave forwarding address
-    full_v[1] = (value)new_v;
+    // leave forwarding marker and to-space object pointer in first field
+    full_v[0] = 0;
+    full_v[1] = (value)(new_v + 1);
 
-    return (value)(new_v + 2);
+    return (value)(new_v + 1);
 }
 
 void* semi_space_collection(void*){
@@ -271,7 +270,7 @@ void* semi_space_collection(void*){
         value* obj = scan_ptr;
         long total_words = obj[0] >> 10;
         
-        for (long i = 2; i < total_words; i++) {
+        for (long i = 1; i < total_words; i++) {
             if (IS_HEAP_PTR(obj[i])) {
                 obj[i] = copy(obj[i], &free_ptr);
             }

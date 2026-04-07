@@ -9,15 +9,16 @@ PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 
 CC=${CC:-gcc}
 CFLAGS=${CFLAGS:--O2 -pthread}
-DEPTHS=${DEPTHS:-"10 12 14"}
+DEPTHS=${DEPTHS:-"14 15"}
 THREADS=${THREADS:-"1 2 4 8"}
-REPEATS=${REPEATS:-3}
+REPEATS=${REPEATS:-1}
 OUT_CSV=${OUT_CSV:-"$SCRIPT_DIR/benchmark_results.csv"}
 
 LOCK_EXE="$SCRIPT_DIR/toycaml_gc_lock"
 TAS_EXE="$SCRIPT_DIR/toycaml_gc_tas"
+PARALLEL_EXE="$SCRIPT_DIR/toycaml_gc_parallel"
 
-if [[ ! -f "$PROJECT_ROOT/runtime.c" || ! -f "$PROJECT_ROOT/semi_space_gc.c" || ! -f "$PROJECT_ROOT/semi_space_gc_TAS_alloc.c" || ! -f "$PROJECT_ROOT/tests/binary_tree_multithreaded.c" ]]; then
+if [[ ! -f "$PROJECT_ROOT/runtime.c" || ! -f "$PROJECT_ROOT/semi_space_gc.c" || ! -f "$PROJECT_ROOT/semi_space_gc_TAS_alloc.c" || ! -f "$PROJECT_ROOT/semi_space_gc_parallel_gc.c" || ! -f "$PROJECT_ROOT/tests/binary_tree_multithreaded.c" ]]; then
   echo "Could not find required source files under project root: $PROJECT_ROOT"
   exit 1
 fi
@@ -30,6 +31,7 @@ fi
 echo "Building binaries..."
 $CC $CFLAGS "$PROJECT_ROOT/runtime.c" "$PROJECT_ROOT/semi_space_gc.c" "$PROJECT_ROOT/tests/binary_tree_multithreaded.c" -o "$LOCK_EXE"
 $CC $CFLAGS "$PROJECT_ROOT/runtime.c" "$PROJECT_ROOT/semi_space_gc_TAS_alloc.c" "$PROJECT_ROOT/tests/binary_tree_multithreaded.c" -o "$TAS_EXE"
+$CC $CFLAGS "$PROJECT_ROOT/runtime.c" "$PROJECT_ROOT/semi_space_gc_parallel_gc.c" "$PROJECT_ROOT/tests/binary_tree_multithreaded.c" -o "$PARALLEL_EXE"
 
 echo "variant,depth,threads,run,elapsed_sec" > "$OUT_CSV"
 
@@ -66,6 +68,7 @@ for depth in $DEPTHS; do
     for run in $(seq 1 "$REPEATS"); do
       run_one "lock" "$LOCK_EXE" "$depth" "$nthreads" "$run"
       run_one "tas" "$TAS_EXE" "$depth" "$nthreads" "$run"
+      run_one "parallel" "$PARALLEL_EXE" "$depth" "$nthreads" "$run"
     done
   done
 done

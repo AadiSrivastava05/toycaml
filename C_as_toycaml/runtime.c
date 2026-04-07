@@ -110,15 +110,20 @@ void init_heap()
 
 long *caml_alloc(long len, long tag)
 {
+    if(len <= 0){
+        fprintf(stderr, "FATAL: Attempting to allocate object with zero or negative length.\n");
+        exit(1);
+    }
+    
     int offset = 0;
     int semantics = 0; /* 0 = AllocationSemantics::Default */
 
     poll_for_gc();
     
-    long *result = (long *)mmtk_alloc(mutator, (len + 2) * sizeof(long), sizeof(long), 0, semantics); // extra slots for header and forwarding pointer
+    long *result = (long *)mmtk_alloc(mutator, (len + 1) * sizeof(long), sizeof(long), 0, semantics); // extra slot for header
 
-    mmtk_post_alloc(mutator, result, (len+2) * sizeof(long), tag, semantics);
-    long *obj_body = result + 2;
+    mmtk_post_alloc(mutator, result, (len+1) * sizeof(long), tag, semantics);
+    long *obj_body = result + 1;
     for (int i = 0; i < len; i++) {
         obj_body[i] = 1; 
     }

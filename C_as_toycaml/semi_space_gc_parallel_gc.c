@@ -193,6 +193,7 @@ void* mmtk_alloc(MMTk_Mutator mutator, size_t size, size_t align, size_t offset,
 
     if (!reserve_thread_page(id, request_bytes)) {
         // printf("\n[GC] I am requesting GC.\n");
+        fprintf(stderr, "[GC] Allocation failed, requesting collection\n");
         stw_state.num_stopped++;
         stw_state.gc_requested = true;
         stw_state.world_has_stopped = false;
@@ -238,7 +239,7 @@ void* mmtk_alloc(MMTk_Mutator mutator, size_t size, size_t align, size_t offset,
         if (!reserve_thread_page(id, request_bytes)) {
             stw_state.num_threads--;
             pthread_mutex_unlock(&stw_state.lock);
-            fprintf(stderr, "FATAL: Out of Memory after GC.\n");
+            fprintf(stderr, "FATAL: Out of Memory after GC while allocating.\n");
             exit(1); 
         }
         
@@ -249,7 +250,7 @@ void* mmtk_alloc(MMTk_Mutator mutator, size_t size, size_t align, size_t offset,
     if (fast_ptr == NULL) {
         stw_state.num_threads--;
         pthread_mutex_unlock(&stw_state.lock);
-        fprintf(stderr, "FATAL: Out of Memory after GC.\n");
+        fprintf(stderr, "FATAL: Out of Memory after GC while allocating.\n");
         exit(1); 
     }
 
@@ -286,56 +287,90 @@ size_t mmtk_total_bytes(){
     return (heap_sz);
 }
 
-value copy(value v, value** free_ptr_ref){
+_Atomic(value*) free_ptr_atomic = 0;
+
+value copy(value v){
     // is it a pointer?
     if(!IS_HEAP_PTR(v)) return v;
 
     // is it actually IN the from_heap?
     if(v < (value)from_heap || v >= (value)from_heap + heap_sz) return v;
 
-    value* full_v = (value*)v - 1;
-
-    // already forwarded?
-    if(full_v[0] == 0){
-        return full_v[1];
-    }
-
-    value header = full_v[0];
-    value tot_words = header >> 10;
-    size_t bytes_sz = tot_words * sizeof(value);
-
-    // copy to the actual free_ptr location
-    value* new_v = *free_ptr_ref;
-    memcpy(new_v, full_v, bytes_sz);
+    value* full_v = ((value*)v - 1);
     
-    // update the caller's free_ptr
-    *free_ptr_ref += tot_words;
+    // casting the header location to an atomic pointer
+    _Atomic(value)* atomic_header_ptr = (_Atomic(value)*)full_v;
+    _Atomic(value)* atomic_slot_ptr = (_Atomic(value)*)(full_v+1);
 
-    // leave forwarding marker and to-space object pointer in first field
-    full_v[0] = 0;
-    full_v[1] = (value)(new_v + 1);
+    // fprintf(stderr, "[GC] Copying object at: %zu\n", (size_t)full_v);
+    // fprintf(stderr, "[GC] Copying object header: %zu\n", (size_t)atomic_load(atomic_header_ptr));
 
-    return (value)(new_v + 1);
+    while(1){
+        value header = atomic_load(atomic_header_ptr);
+        if (header == 0) {
+            // already forwarded
+            return atomic_load(atomic_slot_ptr);
+        }
+        else if(header == -1) {
+            // some other thread is copying this object, we can spin and wait
+            continue;
+        }
+        else {
+            // attempt to claim this object by setting header to -1
+            if(atomic_compare_exchange_weak(atomic_header_ptr, &header, -1)) {
+                value tot_words = header >> 10;
+                size_t bytes_sz = tot_words * sizeof(value);
+
+                // copy to the actual free_ptr location
+                // value* new_v = (value*)atomic_fetch_add(&free_ptr_atomic, tot_words);
+                value* old_free = atomic_load(&free_ptr_atomic);
+                value* new_free;
+                do {
+                    new_free = old_free + tot_words;
+                } while (!atomic_compare_exchange_weak(&free_ptr_atomic, &old_free, new_free));
+
+                value* new_v = old_free;
+                if ((uintptr_t)(new_v + tot_words) > ((uintptr_t)to_heap + heap_sz)) {
+                    fprintf(stderr, "FATAL: Out of Memory during GC while GC it self????.\n");
+                    exit(1);
+                }
+                memcpy(new_v, full_v, bytes_sz);
+                new_v[0] = header; // copy header as well because we changed it to -1 to claim, we need to restore it for the new location
+                atomic_store(atomic_slot_ptr, (value)(new_v + 1)); // store the to-space pointer in the old location
+                atomic_store(atomic_header_ptr, 0); // mark as forwarded with valid to-space pointer
+                return (value)(new_v + 1);
+            }
+        }
+    }
 }
 
-void* semi_space_collection(void*){
-    printf("\n[GC] Collection Started. Used bytes: %zu\n", (size_t)atomic_load(&cur_heap_ptr));
-    value* free_ptr = to_heap;
-    value* scan_ptr = to_heap;
 
+atomic_int picked_static_roots = 0;
+atomic_int picked_local_roots = 0;
+_Atomic(value*) picked_scan_ptr = 0;
+
+
+void* run_semi_space(void*){
     // static/global root scans
-    for(int i = 0 ; i < atomic_load(&static_root_count) ; i++){
+    int i = atomic_fetch_add(&picked_static_roots, 1);
+    int total_static_roots = atomic_load(&static_root_count);
+    while(i < total_static_roots){
         value* root = (value*)static_roots[i];
-        *(root) = copy(*root, &free_ptr);
+        *(root) = copy(*root);
+        i = atomic_fetch_add(&picked_static_roots, 1);
     }
-    
+
     // local root scans
     int total_threads = atomic_load(&registered_threads);
-    for (int i = 0; i < total_threads; i++) {
-        if (!atomic_load(&registry[i].is_active)) continue; // skipping dead threads
+    i = atomic_fetch_add(&picked_local_roots, 1);
+    while(i < total_threads){
+        if (!atomic_load(&registry[i].is_active)) {
+            i = atomic_fetch_add(&picked_local_roots, 1);
+            continue; // skipping dead threads
+        }
         long** retval_ptr = registry[i].gc_retval_ptr;
         if (*retval_ptr != NULL) {
-            *retval_ptr = (long*)copy((value)*retval_ptr, &free_ptr);
+            *retval_ptr = (long*)copy((value)*retval_ptr);
         }
 
         long*** thread_stack = registry[i].root_stack_ptr; 
@@ -343,26 +378,77 @@ void* semi_space_collection(void*){
         long idx = *(registry[i].stack_idx_ptr);
         for (long j = 0; j < idx; j++) {
             // thread_stack[j] is a long** (a pointer to your local variable)
-            *thread_stack[j] = (long*)copy((value)*thread_stack[j], &free_ptr);
+            *thread_stack[j] = (long*)copy((value)*thread_stack[j]);
         }
+        i = atomic_fetch_add(&picked_local_roots, 1);
     }
 
+    return NULL;
+
+}
+
+void* semi_space_collection(void*){
+    printf("\n[GC] Collection Started. Used bytes: %zu\n", (size_t)atomic_load(&cur_heap_ptr));
+
+    atomic_store(&picked_static_roots, 0);
+    atomic_store(&picked_local_roots, 0);
+    // picked_static_roots = 0;
+    // picked_local_roots = 0;
+    // picked_scan_ptr = to_heap;
+    atomic_store(&free_ptr_atomic, (value*)to_heap);
+    // free_ptr_atomic = to_heap;
+
+    // fprintf(stderr, "[GC] The freeptr is at: %zu\n", (size_t)atomic_load(&free_ptr_atomic));
+
+
+    pthread_t pid1, pid2, pid3;
+    if (pthread_create(&pid1, NULL, (run_semi_space), NULL) != 0){
+        perror("Failed to spawn gc thread");
+        exit(1);
+    }
+    if (pthread_create(&pid2, NULL, (run_semi_space), NULL) != 0){
+        perror("Failed to spawn gc thread");
+        exit(1);
+    }
+    if (pthread_create(&pid3, NULL, (run_semi_space), NULL) != 0){
+        perror("Failed to spawn gc thread");
+        exit(1);
+    }
+
+    pthread_join(pid1, NULL);
+    pthread_join(pid2, NULL);
+    pthread_join(pid3, NULL);
+
+    // fprintf(stderr, "[GC] Root copying phase completed\n");
+
+    
     // bfs over active ptrs from roots
-    while (scan_ptr < free_ptr) {
+    value* scan_ptr = to_heap;
+    // fprintf(stderr, "[GC] Starting graph scanning phase\nThe freeptr is at: %zu\nThe scan ptr is at: %zu\n", (size_t)atomic_load(&free_ptr_atomic), (size_t)scan_ptr);
+    
+    while (scan_ptr < (value*)atomic_load(&free_ptr_atomic)) {
+        // printf("\n[GC] Scanning object at: %zu\n", (size_t)scan_ptr);
         value* obj = scan_ptr;
         long total_words = obj[0] >> 10;
+        // printf("[GC] Object has %zu words\n", total_words);
         
-        for (long i = 1; i < total_words; i++) {
-            if (IS_HEAP_PTR(obj[i])) {
-                obj[i] = copy(obj[i], &free_ptr);
+        for (long j = 1; j < total_words; j++) {
+            if (IS_HEAP_PTR(obj[j])) {
+                obj[j] = copy(obj[j]);
             }
         }
         scan_ptr += total_words;
     }
 
+    // fprintf(stderr, "[GC] Graph scanning phase completed\n");
+
+
     value* temp = from_heap;
     from_heap = to_heap;
     to_heap = temp;
+
+    
+    value* free_ptr = (value*)(size_t)atomic_load(&free_ptr_atomic);
 
     atomic_store(&cur_heap_ptr, (value)((free_ptr - from_heap) * sizeof(value)));
     reset_all_thread_pages();

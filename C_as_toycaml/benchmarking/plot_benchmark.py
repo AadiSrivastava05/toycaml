@@ -84,28 +84,32 @@ def write_comparison_csv(comparison_path, stats, depths, threads):
 
     with open(comparison_path, "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["depth", "threads", "lock_mean_sec", "tas_mean_sec", "speedup_lock_over_tas"])
-        if not (lock_key_exists and tas_key_exists):
-            return
-
+        w.writerow(["depth", "threads", "lock_mean", "tas_mean", "parallel_mean", "speedup_lock_over_tas", "speedup_lock_over_parallel", "speedup_tas_over_parallel"])
+        
         for d in depths:
             for t in threads:
                 lock_s = stats.get(("lock", d, t))
                 tas_s = stats.get(("tas", d, t))
-                if lock_s is None or tas_s is None:
-                    continue
-                if tas_s["mean"] == 0:
-                    speedup = math.nan
-                else:
-                    speedup = lock_s["mean"] / tas_s["mean"]
+                parallel_s = stats.get(("parallel", d, t))
+                
+                lock_mean = lock_s["mean"] if lock_s else None
+                tas_mean = tas_s["mean"] if tas_s else None
+                parallel_mean = parallel_s["mean"] if parallel_s else None
+                
+                speedup_tas = lock_mean / tas_mean if lock_mean is not None and tas_mean is not None and tas_mean > 0 else math.nan
+                speedup_parallel = lock_mean / parallel_mean if lock_mean is not None and parallel_mean is not None and parallel_mean > 0 else math.nan
+                speedup_tas_over_parallel = tas_mean / parallel_mean if tas_mean is not None and parallel_mean is not None and parallel_mean > 0 else math.nan
+
                 w.writerow([
                     d,
                     t,
-                    f"{lock_s['mean']:.6f}",
-                    f"{tas_s['mean']:.6f}",
-                    "nan" if math.isnan(speedup) else f"{speedup:.6f}",
+                    f"{lock_mean:.6f}" if lock_mean is not None else "nan",
+                    f"{tas_mean:.6f}" if tas_mean is not None else "nan",
+                    f"{parallel_mean:.6f}" if parallel_mean is not None else "nan",
+                    "nan" if math.isnan(speedup_tas) else f"{speedup_tas:.6f}",
+                    "nan" if math.isnan(speedup_parallel) else f"{speedup_parallel:.6f}",
+                    "nan" if math.isnan(speedup_tas_over_parallel) else f"{speedup_tas_over_parallel:.6f}",
                 ])
-
 
 def main():
     parser = argparse.ArgumentParser(description="Plot benchmark_results.csv for lock vs tas allocators")
@@ -137,6 +141,9 @@ def main():
     stale_speedup = os.path.join(args.out_dir, "tas_speedup.png")
     if os.path.exists(stale_speedup):
         os.remove(stale_speedup)
+    stale_speedup2 = os.path.join(args.out_dir, "parallel_speedup.png")
+    if os.path.exists(stale_speedup2):
+        os.remove(stale_speedup2)
 
     summary_path = os.path.join(args.out_dir, "summary_stats.csv")
     comparison_path = os.path.join(args.out_dir, "lock_vs_tas_speedup.csv")
@@ -211,6 +218,33 @@ def main():
         plt.legend()
         plt.tight_layout()
         speedup_path = os.path.join(args.out_dir, "tas_speedup.png")
+        plt.savefig(speedup_path, dpi=150)
+        plt.close()
+
+    # Plot 3: Parallel speedup = lock_time / parallel_time, one line per depth
+    if "lock" in variants and "parallel" in variants:
+        plt.figure(figsize=(9, 5))
+        for depth in depths:
+            speedups = []
+            for t in threads:
+                lock_s = stats.get(("lock", depth, t))
+                par_s = stats.get(("parallel", depth, t))
+                if lock_s is None or par_s is None or par_s["mean"] == 0.0:
+                    speedups.append(float("nan"))
+                else:
+                    speedups.append(lock_s["mean"] / par_s["mean"])
+
+            plt.plot(threads, speedups, marker="o", linewidth=2, label=f"depth={depth}")
+
+        plt.axhline(1.0, color="black", linestyle="--", linewidth=1)
+        plt.title("Parallel Speedup over Lock (higher is better)")
+        plt.xlabel("Threads")
+        plt.ylabel("Speedup (lock / parallel)")
+        plt.xticks(threads)
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        plt.tight_layout()
+        speedup_path = os.path.join(args.out_dir, "parallel_speedup.png")
         plt.savefig(speedup_path, dpi=150)
         plt.close()
 
