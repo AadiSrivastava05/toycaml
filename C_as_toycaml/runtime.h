@@ -7,7 +7,7 @@
 
 #define HEAP_SIZE (4096 * 1024 * 32)
 #define MIN_ALIGNMENT 2
-#define PAGE_BYTES 2048
+#define PAGE_BYTES 4096
 #define ROOT_STACK_SIZE (1 << 20)
 
 /* OCaml-style field access and tagging */

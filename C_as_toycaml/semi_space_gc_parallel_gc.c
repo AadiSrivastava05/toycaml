@@ -309,7 +309,8 @@ size_t mmtk_total_bytes(){
     return (heap_sz);
 }
 
-_Atomic(value*) free_ptr_atomic = 0;
+/* Word offset from to_heap during collection; use integer fetch_add (not _Atomic(value*) fetch_add). */
+static _Atomic(intptr_t) free_ptr_atomic;
 static atomic_int gc_copy_in_progress;
 
 value copy(value v){
@@ -346,13 +347,8 @@ value copy(value v){
                 size_t bytes_sz = tot_words * sizeof(value);
 
                 atomic_fetch_add(&gc_copy_in_progress, 1);
-                value* old_free = atomic_load(&free_ptr_atomic);
-                value* new_free;
-                do {
-                    new_free = old_free + tot_words;
-                } while (!atomic_compare_exchange_weak(&free_ptr_atomic, &old_free, new_free));
-
-                value* new_v = old_free;
+                intptr_t w = atomic_fetch_add(&free_ptr_atomic, (intptr_t)tot_words);
+                value* new_v = to_heap + w;
                 if ((uintptr_t)(new_v + tot_words) > ((uintptr_t)to_heap + heap_sz)) {
                     fprintf(stderr, "FATAL: Out of Memory during GC while GC it self????.\n");
                     exit(1);
@@ -410,9 +406,9 @@ void* cheney_bfs(void* arg) {
     value* scan = to_heap;
 
     for (;;) {
-        value* f = atomic_load(&free_ptr_atomic);
+        value* f = to_heap + atomic_load(&free_ptr_atomic);
         if ((uintptr_t)scan >= (uintptr_t)f) {
-            f = atomic_load(&free_ptr_atomic);
+            f = to_heap + atomic_load(&free_ptr_atomic);
             if ((uintptr_t)scan >= (uintptr_t)f
                 && atomic_load(&gc_copy_in_progress) == 0)
                 return NULL;
@@ -452,11 +448,7 @@ void* cheney_bfs(void* arg) {
 void* semi_space_collection(void*){
     printf("\n[GC] Collection Started. Used bytes: %zu\n", (size_t)atomic_load(&cur_heap_ptr));
 
-    atomic_store(&free_ptr_atomic, (value*)to_heap);
-    // free_ptr_atomic = to_heap;
-
-    // fprintf(stderr, "[GC] The freeptr is at: %zu\n", (size_t)atomic_load(&free_ptr_atomic));
-
+    atomic_store(&free_ptr_atomic, 0);
 
     pthread_t gc_workers[NUM_GC_THREADS];
     for (int w = 0; w < NUM_GC_THREADS; w++) {
@@ -487,7 +479,7 @@ void* semi_space_collection(void*){
     to_heap = temp;
 
     
-    value* free_ptr = (value*)(size_t)atomic_load(&free_ptr_atomic);
+    value* free_ptr = from_heap + atomic_load(&free_ptr_atomic);
 
     atomic_store(&cur_heap_ptr, (value)((free_ptr - from_heap) * sizeof(value)));
     reset_all_thread_pages();
