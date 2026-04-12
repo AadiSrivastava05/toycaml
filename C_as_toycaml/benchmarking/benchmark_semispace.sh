@@ -9,7 +9,7 @@ PROJECT_ROOT=$(cd -- "$SCRIPT_DIR/.." && pwd)
 
 CC=${CC:-gcc}
 CFLAGS=${CFLAGS:--O2 -pthread}
-DEPTHS=${DEPTHS:-"14 15"}
+DEPTHS=${DEPTHS:-"14"}
 THREADS=${THREADS:-"1 2 4 8"}
 REPEATS=${REPEATS:-1}
 OUT_CSV=${OUT_CSV:-"$SCRIPT_DIR/benchmark_results.csv"}

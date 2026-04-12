@@ -3,16 +3,38 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdatomic.h>
 #include "runtime.h"
 #include <pthread.h>
 
 #define MAX_STATIC_ROOTS 1024
 #define IS_HEAP_PTR(v) (((v) & 1) == 0 && (v) != 0)
 #define MAX_THREADS 128
+#define NUM_GC_THREADS 8
 
 typedef void* MMTk_Mutator;
 
 typedef intptr_t value;
+
+/* Bit 8: COPYING only while installing into to-space (cleared when copy finishes; no swap).
+   Bit 9: scan responsibility — physical idle vs busy swap each collection so survivors’
+   “done” bit pattern becomes next cycle’s idle without a second heap pass. */
+#define GC_HDR_COPYING   ((value)(1 << 8))
+#define GC_SCAN_RESP_BIT ((value)(1 << 9))
+#define GC_HDR_PHYS_MASK (GC_HDR_COPYING | GC_SCAN_RESP_BIT)
+
+static value gc_scan_idle_phys = 0;
+static value gc_scan_busy_phys = GC_SCAN_RESP_BIT;
+
+static void gc_swap_scan_resp_meaning_after_collection(void) {
+    value t = gc_scan_idle_phys;
+    gc_scan_idle_phys = gc_scan_busy_phys;
+    gc_scan_busy_phys = t;
+}
+
+static bool gc_scan_resp_is_busy(value h) {
+    return ((h ^ gc_scan_idle_phys) & GC_SCAN_RESP_BIT) != 0;
+}
 
 extern STW_State stw_state;
 
@@ -268,7 +290,7 @@ void mmtk_post_alloc(MMTk_Mutator mutator,
     value* header_ptr = (value*)refer;
     // store total words (including header)
     long total_words = bytes / sizeof(value);
-    *header_ptr = (total_words << 10) | (tag & 0x3FF); 
+    *header_ptr = (total_words << 10) | (tag & 0xFF) | (gc_scan_idle_phys & GC_SCAN_RESP_BIT);
 }
 
 // return the current amount of used memory in bytes
@@ -288,6 +310,7 @@ size_t mmtk_total_bytes(){
 }
 
 _Atomic(value*) free_ptr_atomic = 0;
+static atomic_int gc_copy_in_progress;
 
 value copy(value v){
     // is it a pointer?
@@ -318,11 +341,11 @@ value copy(value v){
         else {
             // attempt to claim this object by setting header to -1
             if(atomic_compare_exchange_weak(atomic_header_ptr, &header, -1)) {
-                value tot_words = header >> 10;
+                value header_clean = header & ~GC_HDR_PHYS_MASK;
+                value tot_words = header_clean >> 10;
                 size_t bytes_sz = tot_words * sizeof(value);
 
-                // copy to the actual free_ptr location
-                // value* new_v = (value*)atomic_fetch_add(&free_ptr_atomic, tot_words);
+                atomic_fetch_add(&gc_copy_in_progress, 1);
                 value* old_free = atomic_load(&free_ptr_atomic);
                 value* new_free;
                 do {
@@ -334,114 +357,130 @@ value copy(value v){
                     fprintf(stderr, "FATAL: Out of Memory during GC while GC it self????.\n");
                     exit(1);
                 }
-                memcpy(new_v, full_v, bytes_sz);
-                new_v[0] = header; // copy header as well because we changed it to -1 to claim, we need to restore it for the new location
-                atomic_store(atomic_slot_ptr, (value)(new_v + 1)); // store the to-space pointer in the old location
-                atomic_store(atomic_header_ptr, 0); // mark as forwarded with valid to-space pointer
+                _Atomic(value)* new_hdr = (_Atomic(value)*)new_v;
+                atomic_store(new_hdr, header_clean | GC_HDR_COPYING);
+                if (bytes_sz > sizeof(value)) {
+                    memcpy(new_v + 1, full_v + 1, bytes_sz - sizeof(value));
+                }
+                atomic_store(atomic_slot_ptr, (value)(new_v + 1));
+                atomic_store(new_hdr,
+                    (header_clean & ~GC_SCAN_RESP_BIT) | (gc_scan_idle_phys & GC_SCAN_RESP_BIT));
+                atomic_store(atomic_header_ptr, 0);
+                atomic_fetch_add(&gc_copy_in_progress, -1);
                 return (value)(new_v + 1);
             }
         }
     }
 }
 
+void* run_semi_space(void* arg){
+    int w = (int)(intptr_t)arg;
 
-atomic_int picked_static_roots = 0;
-atomic_int picked_local_roots = 0;
-_Atomic(value*) picked_scan_ptr = 0;
-
-
-void* run_semi_space(void*){
-    // static/global root scans
-    int i = atomic_fetch_add(&picked_static_roots, 1);
     int total_static_roots = atomic_load(&static_root_count);
-    while(i < total_static_roots){
+    int s0 = (w * total_static_roots) / NUM_GC_THREADS;
+    int s1 = ((w + 1) * total_static_roots) / NUM_GC_THREADS;
+    for (int i = s0; i < s1; i++) {
         value* root = (value*)static_roots[i];
         *(root) = copy(*root);
-        i = atomic_fetch_add(&picked_static_roots, 1);
     }
 
-    // local root scans
     int total_threads = atomic_load(&registered_threads);
-    i = atomic_fetch_add(&picked_local_roots, 1);
-    while(i < total_threads){
-        if (!atomic_load(&registry[i].is_active)) {
-            i = atomic_fetch_add(&picked_local_roots, 1);
-            continue; // skipping dead threads
-        }
+    int t0 = (w * total_threads) / NUM_GC_THREADS;
+    int t1 = ((w + 1) * total_threads) / NUM_GC_THREADS;
+    for (int i = t0; i < t1; i++) {
+        if (!atomic_load(&registry[i].is_active)) continue;
         long** retval_ptr = registry[i].gc_retval_ptr;
         if (*retval_ptr != NULL) {
             *retval_ptr = (long*)copy((value)*retval_ptr);
         }
 
-        long*** thread_stack = registry[i].root_stack_ptr; 
-        
+        long*** thread_stack = registry[i].root_stack_ptr;
+
         long idx = *(registry[i].stack_idx_ptr);
         for (long j = 0; j < idx; j++) {
-            // thread_stack[j] is a long** (a pointer to your local variable)
             *thread_stack[j] = (long*)copy((value)*thread_stack[j]);
         }
-        i = atomic_fetch_add(&picked_local_roots, 1);
     }
 
     return NULL;
+}
 
+void* cheney_bfs(void* arg) {
+    (void)arg;
+    value* scan = to_heap;
+
+    for (;;) {
+        value* f = atomic_load(&free_ptr_atomic);
+        if ((uintptr_t)scan >= (uintptr_t)f) {
+            f = atomic_load(&free_ptr_atomic);
+            if ((uintptr_t)scan >= (uintptr_t)f
+                && atomic_load(&gc_copy_in_progress) == 0)
+                return NULL;
+            continue;
+        }
+
+        _Atomic(value)* ah = (_Atomic(value)*)scan;
+        value h = atomic_load(ah);
+        value base = h & ~GC_HDR_PHYS_MASK;
+        long tot = (long)(base >> 10);
+        if (tot <= 0) {
+            scan += 1;
+            continue;
+        }
+
+        if ((h & GC_HDR_COPYING) || gc_scan_resp_is_busy(h)) {
+            scan += tot;
+            continue;
+        }
+
+        value want = (h & ~GC_SCAN_RESP_BIT) | (gc_scan_busy_phys & GC_SCAN_RESP_BIT);
+        if (!atomic_compare_exchange_weak(ah, &h, want)) {
+            long skip = (long)((h & ~GC_HDR_PHYS_MASK) >> 10);
+            scan += skip > 0 ? skip : 1;
+            continue;
+        }
+
+        for (long j = 1; j < tot; j++) {
+            if (IS_HEAP_PTR(scan[j]))
+                scan[j] = copy(scan[j]);
+        }
+        /* Header left at busy resp pattern so lagging workers skip; next cycle swap makes it idle. */
+        scan += tot;
+    }
 }
 
 void* semi_space_collection(void*){
     printf("\n[GC] Collection Started. Used bytes: %zu\n", (size_t)atomic_load(&cur_heap_ptr));
 
-    atomic_store(&picked_static_roots, 0);
-    atomic_store(&picked_local_roots, 0);
-    // picked_static_roots = 0;
-    // picked_local_roots = 0;
-    // picked_scan_ptr = to_heap;
     atomic_store(&free_ptr_atomic, (value*)to_heap);
     // free_ptr_atomic = to_heap;
 
     // fprintf(stderr, "[GC] The freeptr is at: %zu\n", (size_t)atomic_load(&free_ptr_atomic));
 
 
-    pthread_t pid1, pid2, pid3;
-    if (pthread_create(&pid1, NULL, (run_semi_space), NULL) != 0){
-        perror("Failed to spawn gc thread");
-        exit(1);
-    }
-    if (pthread_create(&pid2, NULL, (run_semi_space), NULL) != 0){
-        perror("Failed to spawn gc thread");
-        exit(1);
-    }
-    if (pthread_create(&pid3, NULL, (run_semi_space), NULL) != 0){
-        perror("Failed to spawn gc thread");
-        exit(1);
-    }
-
-    pthread_join(pid1, NULL);
-    pthread_join(pid2, NULL);
-    pthread_join(pid3, NULL);
-
-    // fprintf(stderr, "[GC] Root copying phase completed\n");
-
-    
-    // bfs over active ptrs from roots
-    value* scan_ptr = to_heap;
-    // fprintf(stderr, "[GC] Starting graph scanning phase\nThe freeptr is at: %zu\nThe scan ptr is at: %zu\n", (size_t)atomic_load(&free_ptr_atomic), (size_t)scan_ptr);
-    
-    while (scan_ptr < (value*)atomic_load(&free_ptr_atomic)) {
-        // printf("\n[GC] Scanning object at: %zu\n", (size_t)scan_ptr);
-        value* obj = scan_ptr;
-        long total_words = obj[0] >> 10;
-        // printf("[GC] Object has %zu words\n", total_words);
-        
-        for (long j = 1; j < total_words; j++) {
-            if (IS_HEAP_PTR(obj[j])) {
-                obj[j] = copy(obj[j]);
-            }
+    pthread_t gc_workers[NUM_GC_THREADS];
+    for (int w = 0; w < NUM_GC_THREADS; w++) {
+        if (pthread_create(&gc_workers[w], NULL, run_semi_space, (void*)(intptr_t)w) != 0) {
+            perror("Failed to spawn gc thread");
+            exit(1);
         }
-        scan_ptr += total_words;
+    }
+    for (int w = 0; w < NUM_GC_THREADS; w++) {
+        pthread_join(gc_workers[w], NULL);
     }
 
-    // fprintf(stderr, "[GC] Graph scanning phase completed\n");
+    atomic_store(&gc_copy_in_progress, 0);
 
+    pthread_t bfs_workers[NUM_GC_THREADS];
+    for (int w = 0; w < NUM_GC_THREADS; w++) {
+        if (pthread_create(&bfs_workers[w], NULL, cheney_bfs, (void*)(intptr_t)w) != 0) {
+            perror("Failed to spawn cheney bfs thread");
+            exit(1);
+        }
+    }
+    for (int w = 0; w < NUM_GC_THREADS; w++) {
+        pthread_join(bfs_workers[w], NULL);
+    }
 
     value* temp = from_heap;
     from_heap = to_heap;
@@ -454,6 +493,7 @@ void* semi_space_collection(void*){
     reset_all_thread_pages();
     printf("[GC] Collection Finished. Used bytes after compaction: %zu\n", (size_t)atomic_load(&cur_heap_ptr));
 
+    gc_swap_scan_resp_meaning_after_collection();
     return NULL;
 }
 
