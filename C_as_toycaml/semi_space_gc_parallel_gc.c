@@ -10,7 +10,7 @@
 #define MAX_STATIC_ROOTS 1024
 #define IS_HEAP_PTR(v) (((v) & 1) == 0 && (v) != 0)
 #define MAX_THREADS 128
-#define NUM_GC_THREADS 8
+#define NUM_GC_THREADS 4
 
 typedef void* MMTk_Mutator;
 

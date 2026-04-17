@@ -49,13 +49,22 @@ run_one() {
 
   local elapsed
   if command -v /usr/bin/time >/dev/null 2>&1; then
-    elapsed=$(/usr/bin/time -f "%e" "$exe" "$depth" "$nthreads" >/dev/null 2>&1)
+    local tmp_time
+    tmp_time=$(mktemp)
+    /usr/bin/time -f "%e" -o "$tmp_time" "$exe" "$depth" "$nthreads" >/dev/null 2>&1
+    elapsed=$(tr -d '[:space:]' < "$tmp_time")
+    rm -f "$tmp_time"
   else
     local t0 t1
     t0=$(date +%s%N)
     "$exe" "$depth" "$nthreads" >/dev/null 2>&1
     t1=$(date +%s%N)
     elapsed=$(awk -v a="$t0" -v b="$t1" 'BEGIN { printf "%.6f", (b-a)/1000000000.0 }')
+  fi
+
+  if [[ -z "$elapsed" ]]; then
+    echo "Failed to collect elapsed time for $variant depth=$depth threads=$nthreads run=$run_id"
+    exit 1
   fi
 
   echo "$variant,$depth,$nthreads,$run_id,$elapsed" >> "$OUT_CSV"

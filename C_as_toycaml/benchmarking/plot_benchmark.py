@@ -13,21 +13,31 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 def load_rows(csv_path):
     rows = []
+    skipped_rows = 0
     with open(csv_path, "r", newline="") as f:
         reader = csv.DictReader(f)
         required = {"variant", "depth", "threads", "run", "elapsed_sec"}
         if reader.fieldnames is None or not required.issubset(set(reader.fieldnames)):
             raise ValueError("CSV is missing required columns.")
-        for r in reader:
-            rows.append(
-                {
-                    "variant": r["variant"].strip(),
-                    "depth": int(r["depth"]),
-                    "threads": int(r["threads"]),
-                    "run": int(r["run"]),
-                    "elapsed_sec": float(r["elapsed_sec"]),
-                }
-            )
+        for idx, r in enumerate(reader, start=2):
+            try:
+                elapsed_raw = (r.get("elapsed_sec") or "").strip()
+                if not elapsed_raw:
+                    raise ValueError("elapsed_sec is empty")
+                rows.append(
+                    {
+                        "variant": (r.get("variant") or "").strip(),
+                        "depth": int(r["depth"]),
+                        "threads": int(r["threads"]),
+                        "run": int(r["run"]),
+                        "elapsed_sec": float(elapsed_raw),
+                    }
+                )
+            except (ValueError, TypeError, KeyError) as e:
+                skipped_rows += 1
+                print(f"Warning: skipping malformed CSV row {idx}: {e}")
+    if skipped_rows:
+        print(f"Warning: skipped {skipped_rows} malformed row(s) from {csv_path}")
     return rows
 
 

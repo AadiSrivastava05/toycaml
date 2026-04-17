@@ -4,3 +4,4 @@ lex.yy.c
 *.out
 *.exe
 target/
+__pycache__/
